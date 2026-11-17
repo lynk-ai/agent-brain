@@ -5,7 +5,7 @@
 ## Install
 
 ```sh
-uv tool install git+ssh://git@github.com/lynk-ai/agent-brain.git
+uv tool install git+https://github.com/lynk-ai/agent-brain
 brain version
 ```
 

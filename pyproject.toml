@@ -3,6 +3,7 @@ name = "agent-brain"
 version = "0.1.0"
 description = "Keep one agent's brain, a skill in git, whole: feedback, rules, procedures and topics, linked and checked."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = ["pyyaml>=6.0"]
 
