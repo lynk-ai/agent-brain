@@ -37,7 +37,7 @@ FEEDBACK = Kind(
     {
         "name": Field("line"),
         "date": Field("date"),
-        "from": Field("line", fix="Name the teacher by role, as agent.md lists them."),
+        "from": Field("line", fix="Name the person who gave it, by name or role."),
         "kind": Field("enum", choices=("correction", "preference", "approval", "incident", "praise")),
         "source": Field("line"),
         "what_agent_did": Field("str", required=False),
@@ -119,7 +119,6 @@ AGENT = Kind(
         "data": Field("list", required=False),
         "tools": Field("list", required=False),
         "loads": Field("any", required=False),
-        "teachers": Field("list"),
         "decider": Field("line"),
         "roles": Field("any", required=False),
         "enforce_in_harness": Field("list", required=False),

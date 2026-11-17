@@ -3,7 +3,7 @@ name: Trace an action and undo a lesson
 description: Show which rule led to an action and who taught it, and undo a lesson that made the work worse.
 status: active
 trigger: Someone asks why you did something, or a lesson made your work worse.
-outputs: The rule or procedure, the feedback behind it with its words, date and teacher, and a proposed undo when one is asked for.
+outputs: The rule or procedure, the feedback behind it with its words, date and who gave it, and a proposed undo when one is asked for.
 topics: [upkeep]
 ---
 ## Steps

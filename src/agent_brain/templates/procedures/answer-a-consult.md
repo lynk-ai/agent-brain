@@ -12,4 +12,4 @@ topics: [working-with-others]
 2. Answer from your rules, procedures and books. Cite each rule or procedure by its title.
 3. Say what you do not know. Do not guess.
 4. Give advice only. Do not take over the work.
-5. If the question shows a gap in your brain, it becomes feedback only when a teacher confirms it.
+5. If the question shows a gap in your brain, it becomes feedback only when a person confirms it.

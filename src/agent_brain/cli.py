@@ -71,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     ip.add_argument("source", type=Path, help="the darkmatter brain's folder, the one that holds darkmatter.yaml")
     ip.add_argument("--into", type=Path, required=True, help="the new brain's folder; it must not exist or be empty")
     ip.add_argument("--agent", type=Path, help="the agent's darkmatter doc, such as a team brain's wiki/agents/<agent>.md")
-    ip.add_argument("--teacher", default="owner", help="the role to record as every feedback's teacher and the decider; default owner")
+    ip.add_argument("--owner", default="owner", help="the decider, also recorded as who gave each imported feedback; default owner")
     ip.add_argument("--rename", action="append", default=[], metavar="OLD=NEW", help="give a rule or procedure a new id; repeat for more")
     ip.add_argument("--sibling", action="append", default=[], metavar="PATTERN", help="other brains moving in the same change, such as 'lynk-*-playbook'; their paths are rewritten")
 
@@ -80,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     fp = fsub.add_parser("add", help="Write a feedback record, undecided, in the same turn.", parents=[common])
     fp.set_defaults(handler=cmd_feedback_add, command="feedback add")
     fp.add_argument("--name", required=True, help="the feedback in one sentence")
-    fp.add_argument("--from", dest="source_role", required=True, help="who gave it, by role as agent.md lists teachers")
+    fp.add_argument("--from", dest="source_role", required=True, help="the person who gave it, by name or role")
     fp.add_argument("--kind", required=True, choices=KINDS["feedback"].fields["kind"].choices)
     fp.add_argument("--source", required=True, help="where it was said")
     fp.add_argument("--did", default="", help="what the agent had done; required for a correction or an incident")
@@ -364,7 +364,7 @@ def cmd_import_darkmatter(args) -> Result:
         if not sep or not old or not new:
             raise BrainError(Finding("import.rename", pair, "A rename is OLD=NEW.", "Pass --rename run-the-dream=run-the-team-dream."), outcome="error")
         renames[old] = new
-    brain, report = importer.import_darkmatter(args.source, args.into.resolve(), agent_doc=args.agent, teacher=args.teacher, renames=renames, siblings=args.sibling)
+    brain, report = importer.import_darkmatter(args.source, args.into.resolve(), agent_doc=args.agent, owner=args.owner, renames=renames, siblings=args.sibling)
     findings = checks.run(brain)
     lines = ["  imported: " + ", ".join(f"{n} {k}" for k, n in report.counts.items())]
     lines += [f"  dropped: {d}" for d in report.dropped] + [f"  gap: {g}" for g in report.gaps]

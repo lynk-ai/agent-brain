@@ -13,8 +13,6 @@ tools: []
 loads:
   brain: {{name}}
   books: []
-teachers:
-  - "TODO: the role whose feedback becomes lessons"
 decider: "TODO: the role that settles conflicts and approves changes to the brain"
 roles: {}
 enforce_in_harness: []

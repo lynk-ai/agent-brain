@@ -12,7 +12,6 @@ AGENT_VALUES = {
     '"TODO: what it produces, for whom, and where it stops short of the final action."': "Drafts help-center articles from product changes, for the editor's review.",
     '"TODO: what it owns and does itself"': "help-center article drafts",
     '"TODO: an action with an effect outside the brain that it must never take, such as publish, send, pay or delete"': "never publishes an article",
-    '"TODO: the role whose feedback becomes lessons"': "editor",
     '"TODO: the role that settles conflicts and approves changes to the brain"': "editor",
     "TODO: how the agent sounds, as rules a reviewer can check against a draft.": "Plain, short sentences.",
 }

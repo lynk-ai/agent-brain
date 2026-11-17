@@ -19,7 +19,7 @@ Limits, word for word:
 2. Run `brain check`. If it cannot run, write that the brain failed tonight and stop.
 3. List the feedback still pending, and the rules and procedures still proposed.
 4. Read the feedback since the cutoff. If a feedback matches an active rule, count it as that rule failing and raise it to the decider. Never save it as a new rule.
-5. If a feedback contradicts an active rule or another teacher, write it as a conflict for the decider, both sides quoted.
+5. If a feedback contradicts an active rule or another person, write it as a conflict for the decider, both sides quoted.
 6. Find duplicate and near-duplicate rules, contradictions, and the stale rules that `brain check` warns about. Propose a merge, a decision, a check or a retirement for each, in the draft.
 7. Weekly: pair each rule with the closest part of the agent's books, and propose retiring duplicates. Leave stricter rules alone.
 8. Weekly: list rules that would hold for any team in this role and name no company, client or person, as candidates for the book's owner. List them; never move them.

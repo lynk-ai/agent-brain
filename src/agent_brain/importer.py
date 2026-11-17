@@ -32,7 +32,7 @@ def read_source(path: Path) -> tuple[dict, str]:
 
 
 def import_darkmatter(
-    source: Path, dest: Path, *, agent_doc: Path | None = None, teacher: str = "owner", renames: dict[str, str] | None = None, siblings: list[str] = ()
+    source: Path, dest: Path, *, agent_doc: Path | None = None, owner: str = "owner", renames: dict[str, str] | None = None, siblings: list[str] = ()
 ) -> tuple[Brain, Report]:
     source = source.resolve()
     name = source.name
@@ -63,7 +63,7 @@ def import_darkmatter(
             report.gaps.append(f"{where}: a path outside this brain stays as it was: {dead}")
         return text
 
-    agent_meta, voice = agent_record(agent_doc, name, teacher, report)
+    agent_meta, voice = agent_record(agent_doc, name, owner, report)
     display = str(agent_meta.get("display_name") or name)
     shell, shell_meta = skill_shell(source, name, display)
     brain = scaffold.init(dest, name, git=False, team=True, display_name=display)
@@ -102,7 +102,7 @@ def import_darkmatter(
         try:
             scaffold.add_feedback(
                 brain, rid=fid, name=str(meta.get("name", fid)), words=rewrite(sections.get("Feedback", ""), f"feedback/{fid}"),
-                source_role=teacher, kind=str(meta.get("kind")), source=str(meta.get("source", "")), date=meta.get("date"),
+                source_role=owner, kind=str(meta.get("kind")), source=str(meta.get("source", "")), date=meta.get("date"),
                 did=str(meta.get("what_i_did") or (NO_DID if meta.get("kind") in ("correction", "incident") else "")),
                 context=rewrite(sections.get("Context", ""), f"feedback/{fid}"),
             )
@@ -197,7 +197,7 @@ def skill_shell(source: Path, name: str, display: str) -> tuple[str, dict]:
 AGENT_FIELDS = {"description": "description", "job": "job", "anti_jobs": "anti_jobs", "owns": "lane"}
 
 
-def agent_record(doc: Path | None, name: str, teacher: str, report: Report) -> tuple[dict, str]:
+def agent_record(doc: Path | None, name: str, owner: str, report: Report) -> tuple[dict, str]:
     meta: dict = {"name": name}
     voice = ""
     if doc is None:
@@ -211,11 +211,10 @@ def agent_record(doc: Path | None, name: str, teacher: str, report: Report) -> t
     meta.setdefault("lane", [])
     meta.setdefault("anti_jobs", [])
     meta["loads"] = {"brain": name, "books": source.get("external_skills") or [], "skills": [b for b in source.get("brains") or [] if b != name]}
-    meta["teachers"] = [teacher]
-    meta["decider"] = teacher
+    meta["decider"] = owner
     voice = parse_sections(body).get("Voice", "")
     for key in source:
         if key not in (*AGENT_FIELDS, "name", "external_skills", "brains") and source[key]:
             report.dropped.append(f"agent.md: {key}")
-    report.gaps.append(f"agent.md: teachers and decider set to {teacher!r}; darkmatter records no teacher")
+    report.gaps.append(f"agent.md: the decider is {owner!r}, and every imported feedback is from {owner!r}, since darkmatter records who gave none")
     return {k: v for k, v in meta.items() if v not in (None, "")}, voice

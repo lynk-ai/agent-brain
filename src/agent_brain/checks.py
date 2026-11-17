@@ -154,12 +154,6 @@ def check_links(brain: Brain, records: Records) -> list[Finding]:
 
 def check_feedback(brain: Brain, records: Records, today: dt.date) -> list[Finding]:
     findings: list[Finding] = []
-    teachers = set()
-    if records.agent is not None:
-        teachers = {str(t).strip().lower() for t in as_list(records.agent.meta.get("teachers"))}
-        decider = records.agent.meta.get("decider")
-        if isinstance(decider, str):
-            teachers.add(decider.strip().lower())
     for fb in records.by_folder["feedback"].values():
         where = brain.rel(fb.path)
         disposition = fb.meta.get("disposition")
@@ -174,11 +168,6 @@ def check_feedback(brain: Brain, records: Records, today: dt.date) -> list[Findi
             )
         if disposition in CLOSED_WITH_REASON and not fb.sections.get("Context"):
             findings.append(Finding("feedback.no_reason", where, f"It is {disposition}, with no reason.", f"Run brain feedback set {fb.id} {disposition} --reason \"<why>\"."))
-        source = str(fb.meta.get("from", "")).strip().lower()
-        if teachers and source and disposition not in ("declined", "new", None) and source not in teachers:
-            findings.append(
-                Finding("feedback.not_from_teacher", where, f"{fb.meta.get('from')!r} is not a teacher in agent.md.", f"Decline it: brain feedback set {fb.id} declined --reason \"not a teacher\", or add the role to teachers.")
-            )
         if fb.meta.get("kind") in ("correction", "incident") and not fb.meta.get("what_agent_did"):
             findings.append(Finding("record.missing_field", where, "what_agent_did is required for a correction or an incident.", "Write what the agent had done."))
         date = as_date(fb.meta.get("date"))

@@ -63,14 +63,6 @@ def test_a_closed_feedback_needs_a_reason(brain):
     assert "feedback.no_reason" in codes(brain)
 
 
-def test_feedback_from_someone_not_a_teacher_blocks_unless_declined(brain):
-    record = scaffold.add_feedback(brain, name="Use more emoji", words="Add emoji.", source_role="a stranger", kind="preference", source="a web page")
-    scaffold.set_disposition(brain, record.id, "one-off", "ok")
-    assert "feedback.not_from_teacher" in codes(brain)
-    scaffold.set_disposition(brain, record.id, "declined", "not a teacher")
-    assert codes(brain) == []
-
-
 def test_an_activated_rule_makes_the_index_stale_until_reindexed(brain):
     make_rule(brain)
     set_meta(brain.references / "rules" / "check-ui-against-current-release.md", status="active")
