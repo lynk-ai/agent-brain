@@ -27,7 +27,7 @@ brains/help-center-writer/
   brain.yaml                 name, warning periods, harness names the skill may not use
   help-center-writer/        THE SKILL: what a harness loads (install links to it)
     SKILL.md                 hand-written shell, and a generated index between markers
-    agent.md                 job, lane, anti-jobs, teachers, decider, roles, voice
+    agent.md                 job, lane, anti-jobs, decider, roles, voice
     references/
       feedback/  rules/  procedures/  topics/  routines/
   harness/                   harness details, outside the skill
@@ -62,7 +62,6 @@ Every command takes `--project`, before or after the command (the brain's folder
 - Feedback that nobody decided (`new`), and pending, one-off, elsewhere or declined feedback with no reason.
 - Kept feedback that names no record, and a rule with no feedback.
 - A link that does not resolve, or that points only one way.
-- Feedback from a role that is not a teacher in agent.md, unless it is declined.
 - A record with a missing or unknown field, a bad value, a missing body section, a bad file name or a duplicate name.
 - A SKILL.md index that differs from what `brain index` writes. A retired or proposed record is never in the index.
 - A SKILL.md that links feedback, has no description or one over 1,024 characters, has more than 500 lines, or whose name is not its folder's.
