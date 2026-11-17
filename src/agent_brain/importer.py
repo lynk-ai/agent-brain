@@ -32,10 +32,12 @@ def read_source(path: Path) -> tuple[dict, str]:
 
 
 def import_darkmatter(
-    source: Path, dest: Path, *, agent_doc: Path | None = None, owner: str = "owner", renames: dict[str, str] | None = None, siblings: list[str] = ()
+    source: Path, dest: Path, *, agent_doc: Path | None = None, owner: str = "owner", renames: dict[str, str] | None = None, siblings: list[str] = (), name: str = ""
 ) -> tuple[Brain, Report]:
     source = source.resolve()
-    name = source.name
+    plugins = sorted(p.name for p in (source / "plugins").glob("*") if p.is_dir())
+    # The brain is named for its plugin, as installs know it; the folder may be a copy with another name.
+    name = name or (plugins[0] if len(plugins) == 1 else source.name)
     wiki = source / "wiki"
     if not (source / "darkmatter.yaml").is_file() or not wiki.is_dir():
         raise BrainError(Finding("import.not_darkmatter", str(source), "It is not a darkmatter brain: no darkmatter.yaml or wiki/.", "Pass the brain's folder, the one that holds darkmatter.yaml."), outcome="error")

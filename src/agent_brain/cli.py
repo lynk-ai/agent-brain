@@ -73,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     ip.add_argument("--agent", type=Path, help="the agent's darkmatter doc, such as a team brain's wiki/agents/<agent>.md")
     ip.add_argument("--owner", default="owner", help="the decider, also recorded as who gave each imported feedback; default owner")
     ip.add_argument("--rename", action="append", default=[], metavar="OLD=NEW", help="give a rule or procedure a new id; repeat for more")
+    ip.add_argument("--name", default="", help="the brain's name; default its darkmatter plugin's name")
     ip.add_argument("--sibling", action="append", default=[], metavar="PATTERN", help="other brains moving in the same change, such as 'lynk-*-playbook'; their paths are rewritten")
 
     p = command("feedback", None, "Add, decide and list feedback.")
@@ -364,7 +365,7 @@ def cmd_import_darkmatter(args) -> Result:
         if not sep or not old or not new:
             raise BrainError(Finding("import.rename", pair, "A rename is OLD=NEW.", "Pass --rename run-the-dream=run-the-team-dream."), outcome="error")
         renames[old] = new
-    brain, report = importer.import_darkmatter(args.source, args.into.resolve(), agent_doc=args.agent, owner=args.owner, renames=renames, siblings=args.sibling)
+    brain, report = importer.import_darkmatter(args.source, args.into.resolve(), agent_doc=args.agent, owner=args.owner, renames=renames, siblings=args.sibling, name=args.name)
     findings = checks.run(brain)
     lines = ["  imported: " + ", ".join(f"{n} {k}" for k, n in report.counts.items())]
     lines += [f"  dropped: {d}" for d in report.dropped] + [f"  gap: {g}" for g in report.gaps]

@@ -56,3 +56,13 @@ def test_sibling_paths_follow_the_new_layout(tmp_path):
     brain, report = import_darkmatter(src, tmp_path / "out" / "x", agent_doc=tmp_path / "agents/zoe.md", siblings=["lynk-*-playbook"])
     assert "@brains/lynk-email-playbook/lynk-email-playbook/references/rules/a-rule.md" in (brain.references / "rules/keep-posts-short.md").read_text()
     assert not any("lynk-email-playbook" in g for g in report.gaps)
+
+
+def test_the_name_comes_from_the_plugin_not_the_folder(tmp_path):
+    import shutil
+
+    src = darkmatter_brain(tmp_path)
+    copy = tmp_path / "copy-of-it"
+    shutil.copytree(src, copy)
+    brain, _ = import_darkmatter(copy, tmp_path / "out" / "y", agent_doc=tmp_path / "agents/zoe.md")
+    assert brain.name == "lynk-x-playbook" and brain.skill_file.exists()
