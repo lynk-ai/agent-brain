@@ -24,9 +24,9 @@ def install_git(repo: Path) -> Path:
     hook = repo / ".git" / "hooks" / "pre-commit"
     if not (repo / ".git").is_dir():
         raise BrainError(Finding("hooks.no_git", str(repo), "This folder is not the top of a git repository.", "Run git init, or pass --repo with the repository's top folder."), outcome="error")
-    script = f"#!/bin/sh\n{MANAGED}\nexec {brain_command()} check --all --project {shlex.quote(str(repo))}\n"
+    script = f"#!/bin/sh\n{MANAGED}\nexec {brain_command()} check --staged --project {shlex.quote(str(repo))}\n"
     if hook.exists() and MANAGED not in hook.read_text():
-        raise BrainError(Finding("hooks.pre_commit_exists", str(hook), "A pre-commit hook that brain does not manage is already there.", f"Add this line to it: {brain_command()} check --all --project {repo}"))
+        raise BrainError(Finding("hooks.pre_commit_exists", str(hook), "A pre-commit hook that brain does not manage is already there.", f"Add this line to it: {brain_command()} check --staged --project {repo}"))
     hook.parent.mkdir(parents=True, exist_ok=True)
     hook.write_text(script)
     hook.chmod(0o755)
@@ -66,13 +66,16 @@ def stop(payload: dict, brains: list[Brain]) -> dict | None:
         return None
     lines = []
     for brain in brains:
-        for f in checks.blocking(checks.run(brain)):
-            lines.append(f"{f.file}: {f.message} Fix: {f.fix} [{f.code}]")
+        found = checks.blocking(checks.run(brain))
+        if found:
+            # The session runs in a work folder, so name the brain's path for every command and file.
+            lines.append(f"Brain {brain.name}: run every brain command below with --project {brain.root}. Files are under {brain.root}.")
+            lines += [f"  {f.file}: {f.message} Fix: {f.fix} [{f.code}]" for f in found[:20]]
+            if len(found) > 20:
+                lines.append(f"  ...and {len(found) - 20} more. Run brain check --project {brain.root}.")
     if not lines:
         return None
-    shown = lines[:20]
-    more = f"\n...and {len(lines) - 20} more. Run brain check." if len(lines) > 20 else ""
-    reason = "The brain has block findings. Fix them before you stop:\n" + "\n".join(shown) + more
+    reason = "The brain has block findings. Fix them before you stop:\n" + "\n".join(lines)
     return {"decision": "block", "reason": reason}
 
 

@@ -150,3 +150,78 @@ def test_write_keeps_dates_as_dates(brain):
     text = (brain.references / "feedback" / f"{fid}.md").read_text()
     meta = yaml.safe_load(text.split("---\n")[1])
     assert isinstance(meta["date"], dt.date)
+
+
+def test_future_feedback_dates_block(brain):
+    fid = add_correction(brain)
+    scaffold.set_disposition(brain, fid, "one-off", "a slip")
+    set_meta(brain.references / "feedback" / f"{fid}.md", date=dt.date(2030, 1, 1))
+    assert "feedback.future_date" in codes(brain)
+
+
+def test_repository_pins_and_code_are_not_contact_details(brain):
+    procedure = brain.references / "procedures" / "hand-off.md"
+    procedure.write_text(procedure.read_text() + "\nPin `darkmatter.git@v0.7.4` from git+ssh://git@github.com/lynk-ai/darkmatter.git and git@github.com:lynk-ai/x.git.\n")
+    assert codes(brain) == []
+    assert checks.scan_sensitive("install git+ssh://git@github.com/org/repo.git@v1.2.3") == []
+    assert checks.scan_sensitive("write to bob@example.com") == ["an email address"]
+
+
+def test_a_broken_link_in_the_skill_blocks(brain):
+    procedure = brain.references / "procedures" / "hand-off.md"
+    procedure.write_text(procedure.read_text() + "\nSee [the rule](../rules/missing.md), [ok](take-feedback.md) and [web](https://example.org).\n")
+    found = [f for f in checks.run(brain) if f.code == "link.broken"]
+    assert len(found) == 1 and "missing.md" in found[0].message
+
+
+def test_brain_yaml_levels_change_or_turn_off_a_check(brain):
+    procedure = brain.references / "procedures" / "hand-off.md"
+    procedure.write_text(procedure.read_text() + "\nThe project's CLAUDE.md file.\n")
+    assert codes(brain) == ["core.harness_name"]
+    config = brain.root / "brain.yaml"
+    config.write_text(config.read_text() + "levels:\n  core.harness_name: warn\n")
+    assert codes(find(brain.root)) == []
+    config.write_text(config.read_text().replace("core.harness_name: warn", "core.harness_name: off"))
+    assert all(f.code != "core.harness_name" for f in checks.run(find(brain.root)))
+
+
+def test_set_status_rewrites_the_index_and_retiring_needs_a_reason(brain):
+    import pytest
+    from agent_brain.output import BrainError
+
+    make_rule(brain)
+    scaffold.set_status(brain, "rules/check-ui-against-current-release", "active", "")
+    assert "rules/check-ui-against-current-release" in brain.skill_file.read_text()
+    with pytest.raises(BrainError):
+        scaffold.set_status(brain, "rules/check-ui-against-current-release", "retired", "")
+    record = scaffold.set_status(brain, "rules/check-ui-against-current-release", "retired", "made drafts worse")
+    assert "made drafts worse" in record.body
+    assert "check-ui-against-current-release" not in brain.skill_file.read_text()
+    assert codes(brain) == []
+
+
+def test_new_takes_several_topics_rules_and_feedback_and_checks_them(brain):
+    import pytest
+    from agent_brain.output import BrainError
+
+    first = add_correction(brain, "First lesson about screens")
+    second = add_correction(brain, "Second lesson about screens")
+    make_rule(brain, feedback_id=first)
+    scaffold.new_record(brain, "topics", "style", {"name": "Style", "description": "How articles read."}, body="## Scope\n\nTone.\n")
+    body = "## Steps\n\n1. Compare each screen.\n"
+    record = scaffold.new_record(
+        brain, "procedures", "review-screens", {"name": "Review screens", "description": "d", "trigger": "t", "outputs": "o"},
+        feedback_ids=[second], topics=["accuracy", "style"], rules=["check-ui-against-current-release"], body=body,
+    )
+    assert record.meta["topics"] == ["accuracy", "style"]
+    assert record.meta["rules"] == ["check-ui-against-current-release"]
+    assert codes(brain) == []
+    with pytest.raises(BrainError):
+        scaffold.new_record(brain, "rules", "x-rule", {}, topics=["nope"])
+
+
+def test_no_seed_brain_warns_without_take_feedback(repo):
+    brain = scaffold.init(repo / "bare", "bare-agent", seed=False, display_name="Mila")
+    assert "You are Mila." in brain.skill_file.read_text()
+    assert not list((brain.references / "procedures").glob("*.md"))
+    assert "procedure.no_take_feedback" in [f.code for f in checks.run(brain)]

@@ -38,21 +38,22 @@ brains/help-center-writer/
 
 | Command | What it does |
 |---|---|
-| `brain init <name>` | Creates the brain, its seeded procedures and topic, the dream routine and the pre-commit hook. |
-| `brain feedback add` | Writes a feedback record at `disposition: new`. Refuses text that looks like a secret or contact details. |
+| `brain init <name>` | Creates the brain, its seeded procedures and topic, the dream routine and the pre-commit hook. `--display-name Mila` names the agent. `--no-seed` seeds no procedures. |
+| `brain feedback add` | Writes a feedback record at `disposition: new`. `--id` sets its file name. Refuses a future date, a correction or incident without `--did`, and text that looks like a secret or contact details. |
 | `brain feedback set <id> <disposition> --reason` | Closes feedback as pending, one-off, elsewhere or declined, with the reason in Context. |
 | `brain feedback list [--pending]` | Lists feedback. |
-| `brain new rule\|procedure\|topic\|routine <id>` | Writes a skeleton at `status: proposed`. `--feedback <id>` links it both ways. |
+| `brain new rule\|procedure\|topic\|routine <id>` | Writes a record at `status: proposed`. `--feedback`, `--topic` and `--rule` repeat and must exist. `--body-file <file or ->` gives its sections. |
+| `brain set-status <ref> proposed\|active\|retired` | Sets the status and rewrites the index. Retiring needs `--reason`, which goes into Why. |
 | `brain link <feedback> <rules/id\|procedures/id\|agent>` | Links both ways and marks the feedback kept. |
 | `brain unlink <feedback> <record>` | Removes the link both ways. Feedback with no link left goes back to new. |
 | `brain index` | Rewrites the SKILL.md index from the active rules and procedures. |
-| `brain check [--all]` | Runs every check. `--all` checks every brain under the folder. |
+| `brain check [--all] [--staged]` | Runs every check. `--all` checks every brain under the folder. `--staged` checks what git has staged. |
 | `brain trace <ref>` | Shows a record, the feedback behind it and what uses it. |
 | `brain status` | Counts, new and pending feedback, and proposed records. The dream starts here. |
 | `brain install --to <skills folder>` | Links the skill folder into a harness's skills folder. |
 | `brain hooks install [--claude <folder>]` | Installs the pre-commit hook, and the Claude Code Stop and SessionStart hooks. |
 
-Every command takes `--project` (the brain's folder, its installed skill folder, or a folder inside it) and `--json`. The first line of the output is `<outcome>: <headline>`. Each finding is `<file>: <message> Fix: <fix> [<code>]`. The last line is `Next: <command>  (<why>)`. Exit codes: 0 ok, 3 failed or refused, 2 error.
+Every command takes `--project`, before or after the command (the brain's folder, its installed skill folder, or a folder inside it) and `--json`. The first line of the output is `<outcome>: <headline>`. Each finding is `<file>: <message> Fix: <fix> [<code>]`. The last line is `Next: <command>  (<why>)`. Exit codes: 0 ok, 3 failed or refused, 2 error.
 
 ## What `brain check` blocks
 
@@ -63,14 +64,22 @@ Every command takes `--project` (the brain's folder, its installed skill folder,
 - A record with a missing or unknown field, a bad value, a missing body section, a bad file name or a duplicate name.
 - A SKILL.md index that differs from what `brain index` writes. A retired or proposed record is never in the index.
 - A SKILL.md that links feedback, has no description or one over 1,024 characters, has more than 500 lines, or whose name is not its folder's.
-- A `TODO:` placeholder, a secret, contact details or a card number, and a harness name from `brain.yaml` anywhere in the skill.
+- A `TODO:` placeholder, a secret, contact details or a card number, a Markdown link that does not resolve, and a harness name from `brain.yaml` anywhere in the skill. URLs and code spans are not scanned for contact details.
+- Feedback dated in the future.
 
-It warns on feedback pending past `pending_days`, an active rule not checked against its source within `checked_days`, and a SKILL.md over about 5,000 tokens.
+It warns on a brain with no take-feedback procedure, feedback pending past `pending_days`, an active rule not checked against its source within `checked_days`, and a SKILL.md over about 5,000 tokens.
+
+A brain can change a check's level in `brain.yaml`:
+
+```yaml
+levels:
+  core.harness_name: warn   # block, warn or off
+```
 
 ## When the checks run
 
 - **The agent's procedures** run `brain check` after each change. Take a piece of feedback is the first procedure in every index.
-- **The pre-commit hook** runs `brain check --all` on the whole repository. A commit with a broken brain fails.
+- **The pre-commit hook** runs `brain check --staged` on what the commit holds, for every brain in the repository. A commit with a broken brain fails.
 - **The Claude Code Stop hook** runs the checks at the end of each turn. On a block finding it sends the agent back to fix it, once per turn. So feedback written in a turn is decided in that turn.
 - **The Claude Code SessionStart hook** tells the agent how much feedback waits and how many records are proposed.
 

@@ -11,20 +11,19 @@ def render(records: Records) -> str:
     rules = [r for r in records.by_folder["rules"].values() if r.meta.get("status") == "active"]
     procedures = [p for p in records.by_folder["procedures"].values() if p.meta.get("status") == "active"]
 
-    # A rule sits under its first topic only, so each row appears once.
+    # A rule sits under its first topic only, so each row appears once. check blocks a rule with no topic.
     groups: dict[str, list] = {}
     for rule in rules:
-        labels = rule.meta.get("topics") or []
-        key = labels[0] if labels and labels[0] in topics else ""
-        groups.setdefault(key, []).append(rule)
+        labels = rule.meta.get("topics") or [""]
+        groups.setdefault(str(labels[0]), []).append(rule)
 
     def topic_title(key: str) -> str:
-        return str(topics[key].meta.get("name", key)) if key else "Other"
+        return str(topics[key].meta.get("name", key)) if key in topics else key
 
     lines = [START, "## Rules", ""]
     if not rules:
         lines += ["No active rules yet.", ""]
-    for key in sorted(groups, key=lambda k: (k == "", topic_title(k).lower())):
+    for key in sorted(groups, key=lambda k: topic_title(k).lower()):
         lines += [f"### {topic_title(key)}", ""]
         for rule in sorted(groups[key], key=lambda r: str(r.meta.get("name", "")).lower()):
             lines.append(row(rule))

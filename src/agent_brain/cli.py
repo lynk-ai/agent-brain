@@ -1,7 +1,9 @@
 import argparse
 import datetime as dt
 import json
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from . import __version__, checks, hooks, index, scaffold
@@ -18,10 +20,12 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "handler", None):
         parser.print_help()
         return 0
+    args.json = bool(getattr(args, "json", False) or args.top_json)
     try:
+        args.project = merge_project(getattr(args, "project", None), args.top_project)
         result = args.handler(args)
     except BrainError as exc:
-        result = Result(" ".join(sys.argv[1:2]) or "brain", exc.outcome, exc.finding.message, [exc.finding], next=exc.next)
+        result = Result(args.command, exc.outcome, exc.finding.message, [exc.finding], next=exc.next)
     except KeyboardInterrupt:
         return 130
     if result is None:
@@ -30,29 +34,39 @@ def main(argv: list[str] | None = None) -> int:
     return result.exit_code
 
 
+def merge_project(after: Path | None, before: Path | None) -> Path | None:
+    # A subparser rebuilds its namespace, so the options given before the command arrive under their own names.
+    if after and before and after.resolve() != before.resolve():
+        raise BrainError(Finding("cli.two_projects", "--project", f"--project is given twice: {before} and {after}.", "Pass --project once."), outcome="error")
+    return after or before
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--project", type=Path, default=argparse.SUPPRESS, help="the brain's folder, its installed skill folder, or a folder inside it")
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="print one JSON object")
 
-    parser = argparse.ArgumentParser(prog="brain", description=DESCRIPTION, parents=[common])
-    parser.set_defaults(project=None, json=False)
+    parser = argparse.ArgumentParser(prog="brain", description=DESCRIPTION)
+    parser.add_argument("--project", dest="top_project", type=Path, help="the brain's folder, its installed skill folder, or a folder inside it")
+    parser.add_argument("--json", dest="top_json", action="store_true", help="print one JSON object")
     sub = parser.add_subparsers(title="commands", metavar="<command>")
 
     def command(name, handler, help_text, **kwargs):
         p = sub.add_parser(name, help=help_text, description=help_text, parents=[common], **kwargs)
-        p.set_defaults(handler=handler)
+        p.set_defaults(handler=handler, command=name)
         return p
 
     p = command("init", cmd_init, "Create a brain: brain.yaml, the skill folder, agent.md and the seeded procedures.")
     p.add_argument("name", help="the agent's name: lowercase words joined by hyphens")
     p.add_argument("--path", type=Path, help="the folder to create; default ./<name>")
     p.add_argument("--no-git", action="store_true", help="do not run git init or install the pre-commit hook")
+    p.add_argument("--no-seed", action="store_true", help="seed no procedures, topic or routine; the brain then needs its own take-feedback")
+    p.add_argument("--display-name", default="", help="what the agent is called, such as Mila; default the brain's name")
 
     p = command("feedback", None, "Add, decide and list feedback.")
     fsub = p.add_subparsers(title="feedback commands", metavar="<action>")
     fp = fsub.add_parser("add", help="Write a feedback record, undecided, in the same turn.", parents=[common])
-    fp.set_defaults(handler=cmd_feedback_add)
+    fp.set_defaults(handler=cmd_feedback_add, command="feedback add")
     fp.add_argument("--name", required=True, help="the feedback in one sentence")
     fp.add_argument("--from", dest="source_role", required=True, help="who gave it, by role as agent.md lists teachers")
     fp.add_argument("--kind", required=True, choices=KINDS["feedback"].fields["kind"].choices)
@@ -61,21 +75,30 @@ def build_parser() -> argparse.ArgumentParser:
     fp.add_argument("--text", help="the words as said; read from stdin when omitted")
     fp.add_argument("--context", default="", help="the draft, the ticket, or other context")
     fp.add_argument("--date", type=dt.date.fromisoformat, help="YYYY-MM-DD; default today")
+    fp.add_argument("--id", default="", help="the file name without .md; default <date>-<words of the name>")
     fp = fsub.add_parser("set", help="Set a disposition other than kept, with its reason.", parents=[common])
-    fp.set_defaults(handler=cmd_feedback_set)
+    fp.set_defaults(handler=cmd_feedback_set, command="feedback set")
     fp.add_argument("id")
     fp.add_argument("disposition", choices=("pending", "one-off", "elsewhere", "declined"))
     fp.add_argument("--reason", default="")
     fp = fsub.add_parser("list", help="List feedback.", parents=[common])
-    fp.set_defaults(handler=cmd_feedback_list)
+    fp.set_defaults(handler=cmd_feedback_list, command="feedback list")
     fp.add_argument("--pending", action="store_true", help="only feedback that is new or pending")
 
     p = command("new", cmd_new, "Write a rule, procedure, topic or routine skeleton at status proposed.")
     p.add_argument("kind", choices=("rule", "procedure", "topic", "routine"))
     p.add_argument("id", help="the file name without .md: lowercase words joined by hyphens")
-    for flag in ("name", "description", "scope", "topic", "trigger", "outputs", "procedure", "receiver"):
+    for flag in ("name", "description", "scope", "trigger", "outputs", "procedure", "receiver"):
         p.add_argument(f"--{flag}")
-    p.add_argument("--feedback", default="", help="a feedback id to link both ways")
+    p.add_argument("--topic", action="append", default=[], help="a topic id; repeat for more")
+    p.add_argument("--rule", action="append", default=[], help="a rule id a procedure follows; repeat for more")
+    p.add_argument("--feedback", action="append", default=[], help="a feedback id to link both ways; repeat for more")
+    p.add_argument("--body-file", type=Path, help="the record's body (its ## sections), or - for stdin")
+
+    p = command("set-status", cmd_set_status, "Set a rule's or procedure's status, write the reason, and rewrite the index.")
+    p.add_argument("ref", help="rules/<id> or procedures/<id>")
+    p.add_argument("status", choices=("proposed", "active", "retired"))
+    p.add_argument("--reason", default="", help="required for retired; added to the rule's Why")
 
     p = command("link", cmd_link, "Link a feedback to the record it became, both ways, and mark it kept.")
     p.add_argument("feedback")
@@ -87,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     command("index", cmd_index, "Rewrite the SKILL.md index from the active rules and procedures.")
     p = command("check", cmd_check, "Run every check. Exit 3 on any block finding.")
     p.add_argument("--all", action="store_true", help="check every brain under --project, or under this folder")
+    p.add_argument("--staged", action="store_true", help="check what git has staged in the repository, not the working tree")
     p = command("trace", cmd_trace, "Show a record, the feedback behind it, and what links to it.")
     p.add_argument("ref", help="rules/<id>, procedures/<id>, feedback/<id>, or a bare id")
     command("status", cmd_status, "Counts, pending feedback and proposed records: what the dream starts from.")
@@ -96,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = command("hooks", None, "Install the checks into git and Claude Code.")
     hsub = p.add_subparsers(title="hooks commands", metavar="<action>")
     hp = hsub.add_parser("install", help="Install the pre-commit hook, and the Claude Code Stop and SessionStart hooks.", parents=[common])
-    hp.set_defaults(handler=cmd_hooks_install)
+    hp.set_defaults(handler=cmd_hooks_install, command="hooks install")
     hp.add_argument("--repo", type=Path, help="the git repository's top folder; default the brain's repository")
     hp.add_argument("--claude", type=Path, help="the project folder where the agent's Claude Code sessions start")
     hp.add_argument("--no-git", action="store_true", help="skip the pre-commit hook")
@@ -105,7 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     hsub = p.add_subparsers(title="hook events", metavar="<event>")
     for event, handler in (("stop", cmd_hook_stop), ("start", cmd_hook_start)):
         hp = hsub.add_parser(event, parents=[common])
-        hp.set_defaults(handler=handler)
+        hp.set_defaults(handler=handler, command=f"hook {event}")
 
     command("version", cmd_version, "Print the version.")
     return parser
@@ -113,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_init(args) -> Result:
     folder = (args.path or Path.cwd() / args.name).resolve()
-    brain = scaffold.init(folder, args.name, git=not args.no_git)
+    brain = scaffold.init(folder, args.name, git=not args.no_git, seed=not args.no_seed, display_name=args.display_name)
     lines = [f"  created {folder}", f"  the skill: {brain.skill_dir}"]
     if not args.no_git:
         repo = scaffold.git_root(folder)
@@ -134,7 +158,7 @@ def cmd_feedback_add(args) -> Result:
     brain = find(args.project)
     words = args.text if args.text is not None else sys.stdin.read()
     record = scaffold.add_feedback(
-        brain, name=args.name, words=words, source_role=args.source_role, kind=args.kind, source=args.source, did=args.did, context=args.context, date=args.date
+        brain, name=args.name, words=words, source_role=args.source_role, kind=args.kind, source=args.source, did=args.did, context=args.context, date=args.date, rid=args.id
     )
     return Result(
         "feedback add", "ok", f"Feedback {record.id} written. Decide it in this turn.", value={"id": record.id, "path": brain.rel(record.path)},
@@ -163,9 +187,12 @@ def cmd_feedback_list(args) -> Result:
 def cmd_new(args) -> Result:
     brain = find(args.project)
     folder = {"rule": "rules", "procedure": "procedures", "topic": "topics", "routine": "routines"}[args.kind]
-    values = {k: getattr(args, k) for k in ("name", "description", "scope", "topic", "trigger", "outputs", "procedure", "receiver")}
-    record = scaffold.new_record(brain, folder, args.id, values, feedback_id=args.feedback)
-    linked = f", linked to {args.feedback}" if args.feedback else ""
+    values = {k: getattr(args, k) for k in ("name", "description", "scope", "trigger", "outputs", "procedure", "receiver")}
+    body = None
+    if args.body_file:
+        body = sys.stdin.read() if str(args.body_file) == "-" else args.body_file.read_text()
+    record = scaffold.new_record(brain, folder, args.id, values, feedback_ids=args.feedback, topics=args.topic, rules=args.rule, body=body)
+    linked = f", linked to {', '.join(args.feedback)}" if args.feedback else ""
     return Result(
         "new", "ok", f"{record.ref} written{linked}.", value={"ref": record.ref, "path": brain.rel(record.path)},
         next=("brain check", f"replace each TODO: placeholder in {brain.rel(record.path)}"),
@@ -180,6 +207,12 @@ def cmd_link(args) -> Result:
         "link", "ok", f"{fb.id} is kept in {args.target}.",
         next=("brain index" if active else "brain check", "the active record's index row may need its new words" if active else "confirm the brain is whole"),
     )
+
+
+def cmd_set_status(args) -> Result:
+    brain = find(args.project)
+    record = scaffold.set_status(brain, args.ref, args.status, args.reason)
+    return Result("set-status", "ok", f"{record.ref} is {args.status}; the index is rewritten.", next=("brain check", "confirm the brain is whole"))
 
 
 def cmd_unlink(args) -> Result:
@@ -199,16 +232,26 @@ def cmd_index(args) -> Result:
 
 
 def cmd_check(args) -> Result:
+    if args.staged:
+        start = (args.project or Path.cwd()).resolve()
+        repo = scaffold.git_root(start)
+        if repo is None:
+            raise BrainError(Finding("check.no_git", str(start), "--staged needs a git repository.", "Run it inside the repository, or leave out --staged."), outcome="error")
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "-C", str(repo), "checkout-index", "-a", f"--prefix={tmp}/"], check=True)
+            return check_brains(find_all(Path(tmp)), Path(tmp).resolve(), many=True)
     if args.all:
         root = (args.project or Path.cwd()).resolve()
-        brains = find_all(root)
-        if not brains:
-            return Result("check", "ok", f"No brains under {root}.", value=[])
-    else:
-        brains = [find(args.project)]
+        return check_brains(find_all(root), root, many=True)
+    return check_brains([find(args.project)], None, many=False)
+
+
+def check_brains(brains, root: Path | None, many: bool) -> Result:
+    if not brains:
+        return Result("check", "ok", f"No brains under {root}.", value=[])
     findings: list[Finding] = []
     for brain in brains:
-        prefix = "" if not args.all else f"{brain.root.relative_to(root)}/" if brain.root != root else ""
+        prefix = f"{brain.root.relative_to(root)}/" if many and brain.root != root else ""
         findings += [Finding(f.code, prefix + f.file, f.message, f.fix, f.level) for f in checks.run(brain)]
     blocks = sum(1 for f in findings if f.level == BLOCK)
     warns = len(findings) - blocks
@@ -242,7 +285,8 @@ def cmd_trace(args) -> Result:
         for p in users:
             lines.append(f"    used by {p.ref}: {p.meta.get('name')}")
         for t in checks.as_list(record.meta.get("topics")):
-            lines.append(f"    topic {t}")
+            topic = records.get(f"topics/{t}")
+            lines.append(f"    topic {t}: {topic.meta.get('name') if topic else '(missing)'}")
     return Result("trace", "ok", f"{record.ref}.", lines=lines, value={"ref": record.ref, "meta": record.meta})
 
 

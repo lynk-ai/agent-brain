@@ -1,5 +1,6 @@
 import datetime as dt
 import re
+from pathlib import Path
 
 from . import index
 from .brain import Brain
@@ -21,10 +22,13 @@ SECRET_PATTERNS = [
     ("a credential", re.compile(r"(?i)\b(api[_-]?key|secret|password|passwd|token)\b\s*[:=]\s*['\"]?[A-Za-z0-9_\-/+]{12,}")),
 ]
 PERSONAL_PATTERNS = [
-    ("an email address", re.compile(r"\b[\w.+-]+@[\w-]+(\.[\w-]+)+\b")),
+    ("an email address", re.compile(r"\b[\w.+-]+@[\w-]+(\.[\w-]+)*\.[A-Za-z]{2,}\b")),
     ("a phone number", re.compile(r"(?<![\w+])\+\d{1,3}[\s.-]?\(?\d{1,4}\)?(?:[\s.-]?\d{2,4}){2,4}\b|\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b")),
 ]
 CARD_PATTERN = re.compile(r"\b(?:\d{4}[ -]){3}\d{1,7}\b|\b\d{13,19}\b")
+# URLs and code spans hold repository pins such as git@github.com:org/repo, which are not contact details.
+URL_OR_CODE = re.compile(r"`[^`]*`|\b[a-z][a-z0-9+.-]*://\S+|\bgit@[\w.-]+:\S+")
+LINK_PATTERN = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 
 
 def run(brain: Brain, records: Records | None = None, today: dt.date | None = None) -> list[Finding]:
@@ -37,7 +41,9 @@ def run(brain: Brain, records: Records | None = None, today: dt.date | None = No
     findings += check_rules(brain, records, today)
     findings += check_skill(brain, records)
     findings += check_text(brain)
-    return findings
+    # YAML reads a bare off as false.
+    levels = {code: "off" if level is False else str(level) for code, level in (brain.config.get("levels") or {}).items()}
+    return [Finding(f.code, f.file, f.message, f.fix, levels.get(f.code, f.level)) for f in findings if levels.get(f.code) != "off"]
 
 
 def check_shapes(brain: Brain, records: Records) -> list[Finding]:
@@ -176,6 +182,8 @@ def check_feedback(brain: Brain, records: Records, today: dt.date) -> list[Findi
         if fb.meta.get("kind") in ("correction", "incident") and not fb.meta.get("what_agent_did"):
             findings.append(Finding("record.missing_field", where, "what_agent_did is required for a correction or an incident.", "Write what the agent had done."))
         date = as_date(fb.meta.get("date"))
+        if date and date > today:
+            findings.append(Finding("feedback.future_date", where, f"Its date {date} is in the future.", "Set the date the feedback was given."))
         if disposition == "pending" and date and (today - date).days > brain.config["pending_days"]:
             findings.append(
                 Finding("feedback.pending_too_long", where, f"It is pending for {(today - date).days} days.", "Decide it: brain link, or brain feedback set <id> <disposition> --reason.", WARN)
@@ -221,6 +229,8 @@ def check_skill(brain: Brain, records: Records) -> list[Finding]:
         findings.append(Finding("skill.size", where, f"SKILL.md is about {tokens} tokens, over {SKILL_MAX_TOKENS}.", "Shorten rows, or move the least used topics behind one link each.", WARN))
     if "references/feedback/" in text:
         findings.append(Finding("skill.lists_feedback", where, "SKILL.md links feedback. Feedback is evidence, not an instruction.", "Remove the link. Rules and procedures link their feedback."))
+    if "take-feedback" not in records.by_folder["procedures"]:
+        findings.append(Finding("procedure.no_take_feedback", where, "The brain has no take-feedback procedure.", "Write procedures/take-feedback.md, so every correction has one path.", WARN))
     current = index.current(text)
     if current is None:
         findings.append(Finding("skill.markers_missing", where, "SKILL.md has no index markers.", f"Add the lines {index.START} and {index.END}, then run brain index."))
@@ -237,13 +247,17 @@ def check_text(brain: Brain) -> list[Finding]:
     for path in sorted(brain.skill_dir.rglob("*.md")):
         for number, line in enumerate(path.read_text().splitlines(), start=1):
             where = f"{brain.rel(path)}:{number}"
+            for target in LINK_PATTERN.findall(line):
+                if not resolves(path, target):
+                    findings.append(Finding("link.broken", where, f"The link {target} does not resolve.", "Point it at a file inside the skill, or remove it."))
             if UNFINISHED in line:
                 findings.append(Finding("record.unfinished", where, f"It still has a {UNFINISHED} placeholder.", "Replace the placeholder with the real text."))
             for label, pattern in SECRET_PATTERNS:
                 if pattern.search(line):
                     findings.append(Finding("data.secret", where, f"It looks like {label}.", "Remove it, and rotate it if it was real."))
+            prose = URL_OR_CODE.sub(" ", line)
             for label, pattern in PERSONAL_PATTERNS:
-                if pattern.search(line):
+                if pattern.search(prose):
                     findings.append(Finding("data.personal", where, f"It looks like {label}.", "Replace it with a marker such as [email removed]."))
             if any(luhn(m.group()) for m in CARD_PATTERN.finditer(line)):
                 findings.append(Finding("data.personal", where, "It looks like a card number.", "Replace it with [card removed]."))
@@ -253,8 +267,16 @@ def check_text(brain: Brain) -> list[Finding]:
     return findings
 
 
+def resolves(source: Path, target: str) -> bool:
+    if re.match(r"^[a-z][a-z0-9+.-]*:", target) or target.startswith("#"):
+        return True
+    return (source.parent / target.split("#")[0]).exists()
+
+
 def scan_sensitive(text: str) -> list[str]:
-    labels = [label for label, pattern in SECRET_PATTERNS + PERSONAL_PATTERNS if pattern.search(text)]
+    labels = [label for label, pattern in SECRET_PATTERNS if pattern.search(text)]
+    prose = URL_OR_CODE.sub(" ", text)
+    labels += [label for label, pattern in PERSONAL_PATTERNS if pattern.search(prose)]
     if any(luhn(m.group()) for m in CARD_PATTERN.finditer(text)):
         labels.append("a card number")
     return labels

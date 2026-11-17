@@ -79,6 +79,7 @@ PROCEDURE = Kind(
         "topics": Field("list", required=False),
     },
     sections=("Steps",),
+    optional_sections=("Context",),
 )
 
 TOPIC = Kind(
@@ -109,6 +110,7 @@ AGENT = Kind(
     "",
     {
         "name": Field("line"),
+        "display_name": Field("line", required=False),
         "description": Field("line"),
         "job": Field("str"),
         "lane": Field("list"),

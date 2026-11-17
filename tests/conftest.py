@@ -70,8 +70,8 @@ def make_rule(brain: Brain, rid: str = "check-ui-against-current-release", feedb
         topic.write_text(topic.read_text().replace("TODO: what belongs under this topic.", "Facts in articles."))
     scaffold.new_record(
         brain, "rules", rid,
-        {"name": f"Rule {rid}", "description": "Compare each named screen with the release notes.", "scope": "Any article that names a screen.", "topic": "accuracy"},
-        feedback_id=feedback_id,
+        {"name": f"Rule {rid}", "description": "Compare each named screen with the release notes.", "scope": "Any article that names a screen."},
+        feedback_ids=[feedback_id], topics=["accuracy"],
     )
     finish_rule(brain, rid)
     return feedback_id

@@ -11,6 +11,6 @@ topics: [upkeep]
 1. Find the row in the index that you followed.
 2. Run `brain trace <rules/id or procedures/id>`, and quote the feedback it shows: the words, the date and who said them.
 3. If no row led to the action, say so. Do not invent a reason.
-4. To undo a lesson, set its status to retired and add to Why what went wrong, with the date. Never delete the file.
+4. To undo a lesson, run `brain set-status <ref> retired --reason "<what went wrong>"`. Never delete the file.
 5. If the feedback itself was wrong, run `brain unlink <feedback> <record>`, then `brain feedback set <feedback> declined --reason "<why>"`.
-6. Run `brain index` and `brain check`, and propose the undo as one change for the decider.
+6. Run `brain check`, and propose the undo as one change for the decider.

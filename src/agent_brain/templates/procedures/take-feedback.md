@@ -16,7 +16,7 @@ topics: [upkeep]
 6. If it contradicts an active rule or another teacher, write both side by side for the decider. Keep the current rule, and run `brain feedback set <id> pending --reason "<the conflict>"`.
 7. Otherwise decide: one-off, pending (a single edit that may not generalise), elsewhere, declined or kept. For each but kept, run `brain feedback set <id> <disposition> --reason "<why>"`.
 8. For kept, read the rule index first. If a rule holds the same invariant, run `brain link <id> rules/<rule>` and tighten its words.
-9. Otherwise run `brain new rule <rule-id> --feedback <id> --topic <topic>`, and replace every placeholder that `brain check` reports. Steps that run the same way each time go in `brain new procedure` instead.
+9. Otherwise run `brain new rule <rule-id> --feedback <id> --topic <topic>`, with `--body-file` for its Rule, Why and How to apply sections, and replace every placeholder that `brain check` reports. Steps that run the same way each time go in `brain new procedure` instead.
 10. Run `brain check` and fix every block finding.
 11. Open one change with only these files. Never merge it yourself. Never keep the lesson only in harness memory.
 12. Tell the teacher in one line what you filed and that it waits for approval.

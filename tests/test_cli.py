@@ -96,3 +96,37 @@ def test_pre_commit_hook_blocks_a_commit_with_undecided_feedback(repo, brain, mo
 def test_new_rule_refuses_an_unknown_feedback(brain, capsys):
     code, out = run(capsys, "new", "rule", "x-rule", "--project", str(brain.root), "--feedback", "nope")
     assert code == 2 and "[record.not_found]" in out
+
+
+def test_global_options_work_before_the_command(brain, repo, capsys):
+    other = scaffold.init(repo / "brains" / "other", "other-agent")
+    code, out = run(capsys, "--json", "--project", str(other.root), "status")
+    assert json.loads(out)["headline"] == "Brain other-agent."
+    code, out = run(capsys, "--project", str(other.root), "status", "--project", str(brain.root))
+    assert code == 2 and "[cli.two_projects]" in out and out.startswith("error:")
+
+
+def test_feedback_add_refuses_a_correction_without_did_and_a_future_date(brain, capsys):
+    base = ["feedback", "add", "--project", str(brain.root), "--name", "n", "--from", "editor", "--source", "s", "--text", "t"]
+    code, out = run(capsys, *base, "--kind", "correction")
+    assert code == 2 and "[feedback.no_did]" in out
+    code, out = run(capsys, *base, "--kind", "praise", "--date", "2030-01-01")
+    assert code == 2 and "[feedback.future_date]" in out
+    code, out = run(capsys, *base, "--kind", "praise", "--id", "keep-titles-short")
+    assert code == 0 and (brain.references / "feedback" / "keep-titles-short.md").exists()
+
+
+def test_staged_check_ignores_unstaged_files(repo, brain, capsys):
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    add_correction(brain)
+    code, out = run(capsys, "check", "--staged", "--project", str(repo))
+    assert code == 0
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    code, out = run(capsys, "check", "--staged", "--project", str(repo))
+    assert code == 3 and "feedback.undecided" in out
+
+
+def test_stop_hook_names_the_brain_folder_for_its_fixes(brain):
+    add_correction(brain)
+    reason = hooks.stop({"stop_hook_active": False}, [brain])["reason"]
+    assert f"--project {brain.root}" in reason

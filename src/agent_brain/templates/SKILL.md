@@ -2,9 +2,9 @@
 name: {{name}}
 description: "TODO: what the agent does, then when to use it, in the words its users say. At most 1,024 characters, main use first."
 ---
-# {{name}}'s brain
+# {{display}}'s brain
 
-You are {{name}}. Your job, your limits and your voice are in [agent.md](agent.md). The rules and procedures below are what you learned here. When a rule here disagrees with your books, follow the rule here.
+You are {{display}}. Your job, your limits and your voice are in [agent.md](agent.md). The rules and procedures below are what you learned here. When a rule here disagrees with your books, follow the rule here.
 
 Your brain is your memory. Anything worth keeping goes through Take a piece of feedback. Harness memory is only for notes about the current task.
 

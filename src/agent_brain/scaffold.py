@@ -13,11 +13,11 @@ TEMPLATES = resources.files("agent_brain") / "templates"
 TODO = "TODO:"
 
 
-def template(relative: str, name: str) -> str:
-    return (TEMPLATES / relative).read_text().replace("{{name}}", name)
+def template(relative: str, name: str, display_name: str = "") -> str:
+    return (TEMPLATES / relative).read_text().replace("{{display}}", display_name or name).replace("{{name}}", name)
 
 
-def init(folder: Path, name: str, git: bool = True) -> Brain:
+def init(folder: Path, name: str, git: bool = True, seed: bool = True, display_name: str = "") -> Brain:
     if not ID_PATTERN.match(name) or len(name) > 64:
         raise BrainError(Finding("init.bad_name", name, "A brain's name is lowercase letters, digits and single hyphens, at most 64 characters.", "Choose a name such as help-center-writer."), outcome="error")
     if folder.exists() and any(folder.iterdir()):
@@ -36,9 +36,9 @@ def init(folder: Path, name: str, git: bool = True) -> Brain:
     (refs / "rules" / ".gitkeep").write_text("")
 
     (folder / CONFIG_FILE).write_text(template("brain.yaml", name))
-    (skill / "SKILL.md").write_text(template("SKILL.md", name))
-    (skill / "agent.md").write_text(template("agent.md", name))
-    for kind in ("procedures", "topics", "routines"):
+    (skill / "SKILL.md").write_text(template("SKILL.md", name, display_name))
+    (skill / "agent.md").write_text(template("agent.md", name, display_name))
+    for kind in ("procedures", "topics", "routines") if seed else ():
         for source in sorted((TEMPLATES / kind).iterdir()):
             if source.name.endswith(".md"):
                 (refs / kind / source.name).write_text(template(f"{kind}/{source.name}", name))
@@ -68,8 +68,16 @@ def refuse_sensitive(field: str, text: str) -> None:
         )
 
 
-def add_feedback(brain: Brain, *, name: str, words: str, source_role: str, kind: str, source: str, did: str = "", context: str = "", date: dt.date | None = None) -> Record:
+def add_feedback(
+    brain: Brain, *, name: str, words: str, source_role: str, kind: str, source: str, did: str = "", context: str = "", date: dt.date | None = None, rid: str = ""
+) -> Record:
     date = date or dt.date.today()
+    if date > dt.date.today():
+        raise BrainError(Finding("feedback.future_date", date.isoformat(), "The date is in the future.", "Pass the date the feedback was given."), outcome="error")
+    if kind in ("correction", "incident") and not did.strip():
+        raise BrainError(Finding("feedback.no_did", "--did", f"A {kind} needs what the agent had done.", "Pass --did \"<what you had done>\"."), outcome="error")
+    if rid and not ID_PATTERN.match(rid):
+        raise BrainError(Finding("record.bad_id", rid, "An id is lowercase words joined by single hyphens.", "Use an id such as keep-titles-short."), outcome="error")
     if kind not in FEEDBACK.fields["kind"].choices:
         raise BrainError(Finding("feedback.kind", kind, "Unknown kind.", f"Use one of: {', '.join(FEEDBACK.fields['kind'].choices)}."), outcome="error")
     if not words.strip():
@@ -79,10 +87,14 @@ def add_feedback(brain: Brain, *, name: str, words: str, source_role: str, kind:
 
     folder = brain.references / "feedback"
     folder.mkdir(parents=True, exist_ok=True)
-    base = f"{date.isoformat()}-{slug(name)}"
-    rid, n = base, 2
-    while (folder / f"{rid}.md").exists():
-        rid, n = f"{base}-{n}", n + 1
+    if rid:
+        if (folder / f"{rid}.md").exists():
+            raise BrainError(Finding("record.exists", f"feedback/{rid}", "It already exists.", "Choose another --id."))
+    else:
+        base = f"{date.isoformat()}-{slug(name)}"
+        rid, n = base, 2
+        while (folder / f"{rid}.md").exists():
+            rid, n = f"{base}-{n}", n + 1
 
     meta = {"name": name.strip(), "date": date, "from": source_role.strip(), "kind": kind, "source": source.strip()}
     if did.strip():
@@ -168,25 +180,56 @@ def require(records: Records, ref: str, linkable: bool = False) -> Record:
     return record
 
 
-def new_record(brain: Brain, kind_folder: str, rid: str, values: dict, feedback_id: str = "") -> Record:
+def new_record(
+    brain: Brain, kind_folder: str, rid: str, values: dict, feedback_ids: list[str] = (), topics: list[str] = (), rules: list[str] = (), body: str | None = None
+) -> Record:
     kind = KINDS[kind_folder]
     if not ID_PATTERN.match(rid):
         raise BrainError(Finding("record.bad_id", rid, "An id is lowercase words joined by single hyphens.", "Use an id such as check-every-screen."), outcome="error")
     path = brain.references / kind_folder / f"{rid}.md"
     if path.exists():
         raise BrainError(Finding("record.exists", brain.rel(path), "It already exists.", "Edit it, or choose another id."))
-    for label, text in values.items():
+    for label, text in {**values, "body-file": body}.items():
         if isinstance(text, str):
             refuse_sensitive(f"--{label}", text)
-    if feedback_id:
-        require(load(brain), f"feedback/{feedback_id}")
+    if topics and kind_folder not in ("rules", "procedures"):
+        raise BrainError(Finding("new.topic", "--topic", "Only rules and procedures have topics.", "Leave out --topic."), outcome="error")
+    if rules and kind_folder != "procedures":
+        raise BrainError(Finding("new.rule", "--rule", "Only procedures list rules.", "Leave out --rule."), outcome="error")
+    if feedback_ids and kind_folder not in LINKABLE:
+        raise BrainError(Finding("new.feedback", "--feedback", "Only rules and procedures link feedback.", "Leave out --feedback."), outcome="error")
+    records = load(brain)
+    for fid in feedback_ids:
+        require(records, f"feedback/{fid}")
+    for tid in topics:
+        require(records, f"topics/{tid}")
+    for r in rules:
+        require(records, f"rules/{r}")
 
-    meta, body = SKELETONS[kind_folder](rid, values, brain)
+    meta, skeleton = SKELETONS[kind_folder](rid, values, brain)
+    if kind_folder in ("rules", "procedures"):
+        meta["topics"] = list(topics)
+    if kind_folder == "procedures":
+        meta["rules"] = list(rules)
     path.parent.mkdir(parents=True, exist_ok=True)
-    record = Record(kind, rid, path, meta, body)
+    record = Record(kind, rid, path, meta, body if body is not None and body.strip() else skeleton)
     write_record(record)
-    if feedback_id:
-        link(brain, feedback_id, record.ref)
+    for fid in feedback_ids:
+        link(brain, fid, record.ref)
+    return record
+
+
+def set_status(brain: Brain, ref: str, status: str, reason: str) -> Record:
+    record = require(load(brain), ref, linkable=True)
+    if status == "retired" and not reason.strip():
+        raise BrainError(Finding("status.no_reason", ref, "Retiring needs a reason.", "Pass --reason \"<what went wrong, and when>\"."), outcome="error")
+    refuse_sensitive("--reason", reason)
+    record.meta["status"] = status
+    if reason.strip():
+        heading = "Why" if record.kind.folder == "rules" else "Context"
+        record.body = add_to_section(record.body, heading, f"{dt.date.today().isoformat()}, {status}: {reason.strip()}")
+    write_record(record)
+    index.write(brain, load(brain))
     return record
 
 
@@ -202,7 +245,7 @@ def rule_skeleton(rid, v, brain):
         "strength": "default",
         "scope": todo(v.get("scope"), "where it applies"),
         "feedback": [],
-        "topics": [v["topic"]] if v.get("topic") else [],
+        "topics": [],
     }
     body = f"## Rule\n\n{TODO} the invariant only, no steps.\n\n## Why\n\n{TODO} what went wrong, with the dates of its feedback.\n\n## How to apply\n\n{TODO} when it fires, one do and one don't.\n"
     return meta, body
@@ -217,7 +260,7 @@ def procedure_skeleton(rid, v, brain):
         "outputs": todo(v.get("outputs"), "what it leaves behind, so you can check it ran"),
         "rules": [],
         "feedback": [],
-        "topics": [v["topic"]] if v.get("topic") else [],
+        "topics": [],
     }
     body = f"## Steps\n\n1. {TODO} one action per step; write a decision as \"If this, do that.\"\n"
     return meta, body

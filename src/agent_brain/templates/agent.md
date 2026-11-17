@@ -1,5 +1,6 @@
 ---
 name: {{name}}
+display_name: {{display}}
 description: "TODO: one line, what the agent does and for whom."
 job: "TODO: what it produces, for whom, and where it stops short of the final action."
 lane:
