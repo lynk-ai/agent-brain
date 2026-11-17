@@ -18,7 +18,7 @@ A brain is a folder with a `brain.yaml`. One repository can hold one brain or ma
 ```sh
 brain init help-center-writer --path brains/help-center-writer
 brain check --project brains/help-center-writer   # fill each TODO: it reports
-brain install --project brains/help-center-writer --to ~/.claude/skills
+brain install --project brains/help-center-writer --harness claude
 brain hooks install --project brains/help-center-writer --claude ~/code/docs-site
 ```
 
@@ -50,8 +50,10 @@ brains/help-center-writer/
 | `brain check [--all] [--staged]` | Runs every check. `--all` checks every brain under the folder. `--staged` checks what git has staged. |
 | `brain trace <ref>` | Shows a record, the feedback behind it and what uses it. |
 | `brain status` | Counts, new and pending feedback, and proposed records. The dream starts here. |
-| `brain install --to <skills folder>` | Links the skill folder into a harness's skills folder. |
-| `brain hooks install [--claude <folder>]` | Installs the pre-commit hook, and the Claude Code Stop and SessionStart hooks. |
+| `brain install --harness claude\|codex\|cursor\|agents` or `--to <folder>` | Links the skill into a harness's skills folder. `--copy` copies it, for a harness that cannot follow a link. Warns when the checkout is not on the default branch. |
+| `brain plugin` | Writes the brain's `.claude-plugin/plugin.json`, its `source` in brain.yaml, and its line in the repository's `.claude-plugin/marketplace.json`. |
+| `brain import darkmatter <brain> --into <folder>` | Imports a darkmatter agent brain. `--agent` takes the agent's doc, `--rename OLD=NEW` renames a record, `--sibling 'lynk-*-playbook'` rewrites paths into brains that move with it. Reports every dropped field and every gap. |
+| `brain hooks install [--claude\|--codex\|--cursor <folder>]` | Installs the pre-commit hook, and each harness's Stop hook (and SessionStart for Claude Code and Codex). |
 
 Every command takes `--project`, before or after the command (the brain's folder, its installed skill folder, or a folder inside it) and `--json`. The first line of the output is `<outcome>: <headline>`. Each finding is `<file>: <message> Fix: <fix> [<code>]`. The last line is `Next: <command>  (<why>)`. Exit codes: 0 ok, 3 failed or refused, 2 error.
 
@@ -84,6 +86,27 @@ levels:
 - **The Claude Code SessionStart hook** tells the agent how much feedback waits and how many records are proposed.
 
 A script cannot see feedback that the agent never wrote down. Only the take-feedback procedure covers that.
+
+## Share a brain with a team
+
+A brain in a repository with a Claude Code marketplace is a plugin: `brain plugin` lists it, and anyone installs it with `/plugin install <name>@<marketplace>`. In any other harness, clone the repository and run `brain install --harness <harness>`, or `--copy` where a link does not work.
+
+An installed copy is read-only. A change there never reaches the repository, so `brain` refuses it and prints how to clone the repository. Feedback then arrives as a pull request.
+
+## Run the checks in CI
+
+```yaml
+# .github/workflows/brains.yml
+on: [push, pull_request]
+jobs:
+  brains:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv tool install git+https://github.com/lynk-ai/agent-brain
+      - run: brain check --all
+```
 
 ## Develop
 

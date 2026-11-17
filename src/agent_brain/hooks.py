@@ -33,36 +33,54 @@ def install_git(repo: Path) -> Path:
     return hook
 
 
-def install_claude(project_dir: Path, brain_root: Path) -> Path:
-    settings_dir = project_dir / ".claude"
-    settings_path = settings_dir / "settings.local.json"
-    settings_dir.mkdir(parents=True, exist_ok=True)
-    data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+# Each harness keeps hooks in its own file and event names. Cursor lists handlers directly; the others group them.
+HOSTS = {
+    "claude": {"file": Path(".claude/settings.local.json"), "events": {"stop": "Stop", "start": "SessionStart"}},
+    "codex": {"file": Path(".codex/hooks.json"), "events": {"stop": "Stop", "start": "SessionStart"}},
+    "cursor": {"file": Path(".cursor/hooks.json"), "events": {"stop": "stop"}},
+}
+
+
+def install_host(host: str, project_dir: Path, brain_root: Path) -> Path:
+    spec = HOSTS[host]
+    path = project_dir / spec["file"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.loads(path.read_text()) if path.exists() else {}
+    if host == "cursor":
+        data.setdefault("version", 1)
     hooks = data.setdefault("hooks", {})
-    command = brain_command()
     target = shlex.quote(str(brain_root))
-    for event, sub in (("Stop", "stop"), ("SessionStart", "start")):
-        entry_command = f"{command} hook {sub} --project {target}"
-        groups = hooks.setdefault(event, [])
+    for sub, event in spec["events"].items():
+        command = f"{brain_command()} hook {sub} --host {host} --project {target}"
+        entries = hooks.setdefault(event, [])
         # Ours is matched by its arguments, so a reinstall replaces it and leaves other hooks alone.
-        for group in groups:
+        if host == "cursor":
+            entries[:] = [h for h in entries if not owned(h.get("command", ""), sub, target)]
+            entries.append({"command": command, "timeout": 120, "loop_limit": 2})
+            continue
+        for group in entries:
             group["hooks"] = [h for h in group.get("hooks", []) if not owned(h.get("command", ""), sub, target)]
-        groups[:] = [g for g in groups if g.get("hooks")]
-        groups.append({"hooks": [{"type": "command", "command": entry_command}]})
-    settings_path.write_text(json.dumps(data, indent=2) + "\n")
-    ignore = settings_dir / ".gitignore"
-    if not ignore.exists():
-        ignore.write_text("settings.local.json\n")
-    return settings_path
+        entries[:] = [g for g in entries if g.get("hooks")]
+        entries.append({"hooks": [{"type": "command", "command": command, "timeout": 120}]})
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    # The commands pin this machine's paths, so the file stays out of git.
+    ignore = path.parent / ".gitignore"
+    lines = ignore.read_text().splitlines() if ignore.exists() else []
+    if path.name not in lines:
+        ignore.write_text("\n".join([*lines, path.name]) + "\n")
+    return path
 
 
 def owned(command: str, sub: str, target: str) -> bool:
-    return f" hook {sub} --project {target}" in command
+    return f" hook {sub} " in command and f"--project {target}" in command
 
 
-def stop(payload: dict, brains: list[Brain]) -> dict | None:
-    # A second refusal in the same turn would loop; Claude Code sets stop_hook_active on the continuation.
-    if payload.get("stop_hook_active"):
+def stop(payload: dict, brains: list[Brain], host: str = "claude") -> dict | None:
+    # One repair per turn: a second refusal would loop. Claude Code and Codex flag the continuation, Cursor counts it.
+    if host == "cursor":
+        if payload.get("status", "completed") != "completed" or (payload.get("loop_count") or 0) > 0:
+            return None
+    elif payload.get("stop_hook_active"):
         return None
     lines = []
     for brain in brains:
@@ -76,7 +94,7 @@ def stop(payload: dict, brains: list[Brain]) -> dict | None:
     if not lines:
         return None
     reason = "The brain has block findings. Fix them before you stop:\n" + "\n".join(lines)
-    return {"decision": "block", "reason": reason}
+    return {"followup_message": reason} if host == "cursor" else {"decision": "block", "reason": reason}
 
 
 def start(brains: list[Brain]) -> str:

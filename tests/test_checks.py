@@ -128,21 +128,29 @@ def test_dates_are_not_phone_or_card_numbers(brain):
 
 
 def test_pending_too_long_and_stale_rules_warn(brain):
-    record = scaffold.add_feedback(brain, name="Maybe shorter titles", words="Shorter?", source_role="editor", kind="preference", source="chat", date=dt.date(2026, 1, 1))
+    record = scaffold.add_feedback(brain, name="Maybe shorter titles", words="Shorter?", source_role="editor", kind="preference", source="chat")
     scaffold.set_disposition(brain, record.id, "pending", "wait for a second time")
     make_rule(brain)
     set_meta(brain.references / "rules" / "check-ui-against-current-release.md", status="active", rests_on="release notes", checked=dt.date(2026, 1, 1))
     index.write(brain, load(brain))
-    findings = checks.run(brain, today=dt.date(2026, 11, 17))
+    findings = checks.run(brain, today=dt.date.today() + dt.timedelta(days=30))
     warns = {f.code for f in findings if f.level == "warn"}
     assert warns == {"feedback.pending_too_long", "rule.stale"}
     assert checks.blocking(findings) == []
 
 
 def test_find_follows_an_installed_symlink(brain, tmp_path):
-    link = scaffold.install(brain, tmp_path / "skills")
+    from agent_brain import plugin
+
+    link, _ = plugin.install(brain, None, tmp_path / "skills", copy=False)
     assert find(link).root == brain.root
-    assert scaffold.install(brain, tmp_path / "skills") == link
+    assert plugin.install(brain, None, tmp_path / "skills", copy=False)[0] == link
+
+
+def test_pending_counts_from_when_it_was_set_pending(brain):
+    record = scaffold.add_feedback(brain, name="Old note", words="Shorter?", source_role="editor", kind="preference", source="chat", date=dt.date(2025, 1, 1))
+    scaffold.set_disposition(brain, record.id, "pending", "wait for a second time")
+    assert not [f for f in checks.run(brain) if f.code == "feedback.pending_too_long"]
 
 
 def test_write_keeps_dates_as_dates(brain):

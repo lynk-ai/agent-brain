@@ -184,9 +184,10 @@ def check_feedback(brain: Brain, records: Records, today: dt.date) -> list[Findi
         date = as_date(fb.meta.get("date"))
         if date and date > today:
             findings.append(Finding("feedback.future_date", where, f"Its date {date} is in the future.", "Set the date the feedback was given."))
-        if disposition == "pending" and date and (today - date).days > brain.config["pending_days"]:
+        since = pending_since(fb.sections.get("Context", "")) or date
+        if disposition == "pending" and since and (today - since).days > brain.config["pending_days"]:
             findings.append(
-                Finding("feedback.pending_too_long", where, f"It is pending for {(today - date).days} days.", "Decide it: brain link, or brain feedback set <id> <disposition> --reason.", WARN)
+                Finding("feedback.pending_too_long", where, f"It is pending for {(today - since).days} days.", "Decide it: brain link, or brain feedback set <id> <disposition> --reason.", WARN)
             )
     return findings
 
@@ -229,6 +230,9 @@ def check_skill(brain: Brain, records: Records) -> list[Finding]:
         findings.append(Finding("skill.size", where, f"SKILL.md is about {tokens} tokens, over {SKILL_MAX_TOKENS}.", "Shorten rows, or move the least used topics behind one link each.", WARN))
     if "references/feedback/" in text:
         findings.append(Finding("skill.lists_feedback", where, "SKILL.md links feedback. Feedback is evidence, not an instruction.", "Remove the link. Rules and procedures link their feedback."))
+    from . import plugin
+
+    findings += plugin.drift(brain)
     if "take-feedback" not in records.by_folder["procedures"]:
         findings.append(Finding("procedure.no_take_feedback", where, "The brain has no take-feedback procedure.", "Write procedures/take-feedback.md, so every correction has one path.", WARN))
     current = index.current(text)
@@ -265,6 +269,12 @@ def check_text(brain: Brain) -> list[Finding]:
                 if name in line:
                     findings.append(Finding("core.harness_name", where, f"The core names {name!r}, a harness detail.", "Keep harness details in harness/<harness>/, outside the skill."))
     return findings
+
+
+def pending_since(context: str) -> dt.date | None:
+    # brain feedback set writes "<date>, pending: <reason>"; the last such line is when it was set to pending.
+    dates = re.findall(r"^(\d{4}-\d{2}-\d{2}), pending:", context, re.MULTILINE)
+    return as_date(dates[-1]) if dates else None
 
 
 def resolves(source: Path, target: str) -> bool:

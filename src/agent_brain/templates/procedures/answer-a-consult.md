@@ -4,7 +4,7 @@ description: Answer another role's question from your lane, citing the rule or p
 status: active
 trigger: Another role asks for your advice.
 outputs: One answer that cites its rules or procedures and says what you do not know.
-topics: [upkeep]
+topics: [working-with-others]
 ---
 ## Steps
 

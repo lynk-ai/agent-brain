@@ -17,7 +17,7 @@ def template(relative: str, name: str, display_name: str = "") -> str:
     return (TEMPLATES / relative).read_text().replace("{{display}}", display_name or name).replace("{{name}}", name)
 
 
-def init(folder: Path, name: str, git: bool = True, seed: bool = True, display_name: str = "") -> Brain:
+def init(folder: Path, name: str, git: bool = True, seed: bool = True, display_name: str = "", team: bool = False) -> Brain:
     if not ID_PATTERN.match(name) or len(name) > 64:
         raise BrainError(Finding("init.bad_name", name, "A brain's name is lowercase letters, digits and single hyphens, at most 64 characters.", "Choose a name such as help-center-writer."), outcome="error")
     if folder.exists() and any(folder.iterdir()):
@@ -38,7 +38,8 @@ def init(folder: Path, name: str, git: bool = True, seed: bool = True, display_n
     (folder / CONFIG_FILE).write_text(template("brain.yaml", name))
     (skill / "SKILL.md").write_text(template("SKILL.md", name, display_name))
     (skill / "agent.md").write_text(template("agent.md", name, display_name))
-    for kind in ("procedures", "topics", "routines") if seed else ():
+    # In a team, the team brain holds the routines; the agent brain keeps only the procedures they run.
+    for kind in (("procedures", "topics") if team else ("procedures", "topics", "routines")) if seed else ():
         for source in sorted((TEMPLATES / kind).iterdir()):
             if source.name.endswith(".md"):
                 (refs / kind / source.name).write_text(template(f"{kind}/{source.name}", name))
@@ -288,14 +289,3 @@ def routine_skeleton(rid, v, brain):
 
 SKELETONS = {"rules": rule_skeleton, "procedures": procedure_skeleton, "topics": topic_skeleton, "routines": routine_skeleton}
 
-
-def install(brain: Brain, skills_dir: Path) -> Path:
-    skills_dir = skills_dir.expanduser()
-    skills_dir.mkdir(parents=True, exist_ok=True)
-    target = skills_dir / brain.name
-    if target.is_symlink() and target.resolve() == brain.skill_dir.resolve():
-        return target
-    if target.exists() or target.is_symlink():
-        raise BrainError(Finding("install.exists", str(target), "Something else is already there.", "Remove it, or choose another --to folder."))
-    target.symlink_to(brain.skill_dir.resolve(), target_is_directory=True)
-    return target

@@ -6,8 +6,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, checks, hooks, index, scaffold
-from .brain import find, find_all
+from . import __version__, checks, hooks, importer, index, plugin, scaffold
+from .brain import find, find_all, require_writable
 from .output import BLOCK, BrainError, Finding, Result, render_json, render_text
 from .records import KINDS, load
 
@@ -62,6 +62,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-git", action="store_true", help="do not run git init or install the pre-commit hook")
     p.add_argument("--no-seed", action="store_true", help="seed no procedures, topic or routine; the brain then needs its own take-feedback")
     p.add_argument("--display-name", default="", help="what the agent is called, such as Mila; default the brain's name")
+    p.add_argument("--team", action="store_true", help="the agent works in a team whose team brain holds its routines: seed no routine")
+
+    p = command("import", None, "Import a brain from another tool.")
+    isub = p.add_subparsers(title="sources", metavar="<source>")
+    ip = isub.add_parser("darkmatter", help="Import a darkmatter agent brain: its feedback, rules, procedures, topics and skill shell.", parents=[common])
+    ip.set_defaults(handler=cmd_import_darkmatter, command="import darkmatter")
+    ip.add_argument("source", type=Path, help="the darkmatter brain's folder, the one that holds darkmatter.yaml")
+    ip.add_argument("--into", type=Path, required=True, help="the new brain's folder; it must not exist or be empty")
+    ip.add_argument("--agent", type=Path, help="the agent's darkmatter doc, such as a team brain's wiki/agents/<agent>.md")
+    ip.add_argument("--teacher", default="owner", help="the role to record as every feedback's teacher and the decider; default owner")
+    ip.add_argument("--rename", action="append", default=[], metavar="OLD=NEW", help="give a rule or procedure a new id; repeat for more")
+    ip.add_argument("--sibling", action="append", default=[], metavar="PATTERN", help="other brains moving in the same change, such as 'lynk-*-playbook'; their paths are rewritten")
 
     p = command("feedback", None, "Add, decide and list feedback.")
     fsub = p.add_subparsers(title="feedback commands", metavar="<action>")
@@ -114,8 +126,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = command("trace", cmd_trace, "Show a record, the feedback behind it, and what links to it.")
     p.add_argument("ref", help="rules/<id>, procedures/<id>, feedback/<id>, or a bare id")
     command("status", cmd_status, "Counts, pending feedback and proposed records: what the dream starts from.")
-    p = command("install", cmd_install, "Link the skill folder into a harness's skills folder.")
-    p.add_argument("--to", type=Path, required=True, help="the skills folder, such as ~/.agents/skills")
+    p = command("install", cmd_install, "Install the skill in a harness: a link to this checkout, or a copy.")
+    p.add_argument("--harness", choices=tuple(plugin.HARNESS_SKILLS), help="install in this harness's skills folder for the user")
+    p.add_argument("--to", type=Path, help="install in this skills folder")
+    p.add_argument("--copy", action="store_true", help="copy the skill, for a harness that cannot follow a link; feedback then goes to a clone")
+    command("plugin", cmd_plugin, "Write the brain's plugin.json and its line in the repository's marketplace.")
 
     p = command("hooks", None, "Install the checks into git and Claude Code.")
     hsub = p.add_subparsers(title="hooks commands", metavar="<action>")
@@ -123,6 +138,8 @@ def build_parser() -> argparse.ArgumentParser:
     hp.set_defaults(handler=cmd_hooks_install, command="hooks install")
     hp.add_argument("--repo", type=Path, help="the git repository's top folder; default the brain's repository")
     hp.add_argument("--claude", type=Path, help="the project folder where the agent's Claude Code sessions start")
+    hp.add_argument("--codex", type=Path, help="the project folder where the agent's Codex sessions start")
+    hp.add_argument("--cursor", type=Path, help="the project folder where the agent's Cursor sessions start")
     hp.add_argument("--no-git", action="store_true", help="skip the pre-commit hook")
 
     p = command("hook", None, "Run by an installed hook. Not for direct use.")
@@ -130,6 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
     for event, handler in (("stop", cmd_hook_stop), ("start", cmd_hook_start)):
         hp = hsub.add_parser(event, parents=[common])
         hp.set_defaults(handler=handler, command=f"hook {event}")
+        hp.add_argument("--host", choices=tuple(hooks.HOSTS), default="claude")
 
     command("version", cmd_version, "Print the version.")
     return parser
@@ -137,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_init(args) -> Result:
     folder = (args.path or Path.cwd() / args.name).resolve()
-    brain = scaffold.init(folder, args.name, git=not args.no_git, seed=not args.no_seed, display_name=args.display_name)
+    brain = scaffold.init(folder, args.name, git=not args.no_git, seed=not args.no_seed, display_name=args.display_name, team=args.team)
     lines = [f"  created {folder}", f"  the skill: {brain.skill_dir}"]
     if not args.no_git:
         repo = scaffold.git_root(folder)
@@ -156,6 +174,7 @@ def cmd_init(args) -> Result:
 
 def cmd_feedback_add(args) -> Result:
     brain = find(args.project)
+    require_writable(brain)
     words = args.text if args.text is not None else sys.stdin.read()
     record = scaffold.add_feedback(
         brain, name=args.name, words=words, source_role=args.source_role, kind=args.kind, source=args.source, did=args.did, context=args.context, date=args.date, rid=args.id
@@ -168,6 +187,7 @@ def cmd_feedback_add(args) -> Result:
 
 def cmd_feedback_set(args) -> Result:
     brain = find(args.project)
+    require_writable(brain)
     record = scaffold.set_disposition(brain, args.id, args.disposition, args.reason)
     return Result("feedback set", "ok", f"Feedback {record.id} is {args.disposition}.", value={"id": record.id}, next=("brain check", "confirm the brain is whole"))
 
@@ -186,6 +206,7 @@ def cmd_feedback_list(args) -> Result:
 
 def cmd_new(args) -> Result:
     brain = find(args.project)
+    require_writable(brain)
     folder = {"rule": "rules", "procedure": "procedures", "topic": "topics", "routine": "routines"}[args.kind]
     values = {k: getattr(args, k) for k in ("name", "description", "scope", "trigger", "outputs", "procedure", "receiver")}
     body = None
@@ -201,6 +222,7 @@ def cmd_new(args) -> Result:
 
 def cmd_link(args) -> Result:
     brain = find(args.project)
+    require_writable(brain)
     fb, target = scaffold.link(brain, args.feedback, args.target)
     active = target is not None and target.meta.get("status") == "active"
     return Result(
@@ -211,18 +233,21 @@ def cmd_link(args) -> Result:
 
 def cmd_set_status(args) -> Result:
     brain = find(args.project)
+    require_writable(brain)
     record = scaffold.set_status(brain, args.ref, args.status, args.reason)
     return Result("set-status", "ok", f"{record.ref} is {args.status}; the index is rewritten.", next=("brain check", "confirm the brain is whole"))
 
 
 def cmd_unlink(args) -> Result:
     brain = find(args.project)
+    require_writable(brain)
     fb = scaffold.unlink(brain, args.feedback, args.target)
     return Result("unlink", "ok", f"{fb.id} no longer links {args.target}. It is {fb.meta['disposition']}.", next=("brain check", "confirm the brain is whole"))
 
 
 def cmd_index(args) -> Result:
     brain = find(args.project)
+    require_writable(brain)
     records = load(brain)
     if not brain.skill_file.is_file() or not index.write(brain, records):
         raise BrainError(Finding("skill.markers_missing", brain.rel(brain.skill_file), "SKILL.md has no index markers.", f"Add the lines {index.START} and {index.END}."))
@@ -317,10 +342,37 @@ def cmd_status(args) -> Result:
 
 def cmd_install(args) -> Result:
     brain = find(args.project)
-    target = scaffold.install(brain, args.to)
+    target, lines = plugin.install(brain, args.harness, args.to, args.copy)
+    kind = "a copy of" if args.copy else "a link to"
     return Result(
-        "install", "ok", f"{target} links to {brain.skill_dir}.",
+        "install", "ok", f"{target} is {kind} {brain.skill_dir}.", lines=lines,
         next=("start a fresh session and ask one question only the brain answers", "the answer must cite a rule or procedure by its title"),
+    )
+
+
+def cmd_plugin(args) -> Result:
+    brain = find(args.project)
+    require_writable(brain)
+    lines = plugin.write(brain)
+    return Result("plugin", "ok", f"Plugin {brain.name} written.", lines=lines, next=("brain check", "confirm the plugin matches the brain"))
+
+
+def cmd_import_darkmatter(args) -> Result:
+    renames = {}
+    for pair in args.rename:
+        old, sep, new = pair.partition("=")
+        if not sep or not old or not new:
+            raise BrainError(Finding("import.rename", pair, "A rename is OLD=NEW.", "Pass --rename run-the-dream=run-the-team-dream."), outcome="error")
+        renames[old] = new
+    brain, report = importer.import_darkmatter(args.source, args.into.resolve(), agent_doc=args.agent, teacher=args.teacher, renames=renames, siblings=args.sibling)
+    findings = checks.run(brain)
+    lines = ["  imported: " + ", ".join(f"{n} {k}" for k, n in report.counts.items())]
+    lines += [f"  dropped: {d}" for d in report.dropped] + [f"  gap: {g}" for g in report.gaps]
+    blocks = len(checks.blocking(findings))
+    value = {"root": str(brain.root), "counts": report.counts, "dropped": report.dropped, "gaps": report.gaps, "block_findings": blocks}
+    return Result(
+        "import darkmatter", "ok", f"Imported {brain.name} into {brain.root}: {blocks} block findings to resolve.", lines=lines, value=value,
+        next=(f"brain check --project {brain.root}", "resolve each gap and block finding"),
     )
 
 
@@ -330,10 +382,12 @@ def cmd_hooks_install(args) -> Result:
     if not args.no_git:
         repo = (args.repo or scaffold.git_root(brain.root) or brain.root).resolve()
         lines.append(f"  pre-commit: {hooks.install_git(repo)}")
-    if args.claude:
-        lines.append(f"  Claude Code: {hooks.install_claude(args.claude.resolve(), brain.root)}")
+    for host in hooks.HOSTS:
+        folder = getattr(args, host)
+        if folder:
+            lines.append(f"  {host}: {hooks.install_host(host, folder.resolve(), brain.root)}")
     if not lines:
-        raise BrainError(Finding("hooks.nothing", "hooks install", "Nothing to install.", "Pass --claude <folder>, or leave out --no-git."), outcome="error")
+        raise BrainError(Finding("hooks.nothing", "hooks install", "Nothing to install.", "Pass --claude, --codex or --cursor <folder>, or leave out --no-git."), outcome="error")
     return Result("hooks install", "ok", "Hooks installed.", lines=lines)
 
 
@@ -341,7 +395,7 @@ def cmd_hook_stop(args) -> None:
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
-        out = hooks.stop(payload, find_all(resolve_project(args)))
+        out = hooks.stop(payload, find_all(resolve_project(args)), host=args.host)
     except Exception as exc:  # A broken hook must not trap the agent in its turn.
         print(f"brain hook stop: {exc}", file=sys.stderr)
         return None

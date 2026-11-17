@@ -4,7 +4,7 @@ description: Pass work outside your lane to the role that owns it, with what you
 status: active
 trigger: A request falls outside your lane or touches an anti-job in agent.md.
 outputs: One handoff to a role, and one line to the person who asked.
-topics: [upkeep]
+topics: [working-with-others]
 ---
 ## Steps
 

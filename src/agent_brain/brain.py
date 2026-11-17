@@ -1,3 +1,4 @@
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import yaml
 from .output import BrainError, Finding
 
 CONFIG_FILE = "brain.yaml"
+COPY_MARKER = ".brain-source.yaml"
 
 DEFAULTS = {
     "pending_days": 14,
@@ -18,6 +20,7 @@ DEFAULTS = {
 class Brain:
     root: Path
     config: dict
+    copy: bool = False
 
     @property
     def name(self) -> str:
@@ -53,6 +56,10 @@ def find(start: Path | None = None) -> Brain:
         config_path = folder / CONFIG_FILE
         if config_path.is_file():
             return Brain(root=folder, config=load_config(config_path))
+        marker = folder / COPY_MARKER
+        if marker.is_file():
+            data = yaml.safe_load(marker.read_text()) or {}
+            return Brain(root=folder.parent, config={**DEFAULTS, **(data.get("config") or {})}, copy=True)
     raise BrainError(
         Finding(
             "brain.not_found",
@@ -74,6 +81,25 @@ def find_all(start: Path) -> list[Brain]:
         if SKIP_DIRS.isdisjoint(config_path.relative_to(start.resolve()).parts):
             brains.append(Brain(root=config_path.parent, config=load_config(config_path)))
     return brains
+
+
+def require_writable(brain: Brain) -> None:
+    # An installed copy (a plugin cache or install --copy) is not the brain's repository, so a change there is lost.
+    source = brain.config.get("source") or {}
+    if not brain.copy and (not source or in_git(brain.root)):
+        return
+    repo, path = source.get("repo"), source.get("path")
+    fix = (
+        f"Clone it: git clone {repo}, then run the same command with --project <clone>/{path}, and open a pull request."
+        if repo and path
+        else "Find the brain's repository, and run the command in a clone of it."
+    )
+    raise BrainError(Finding("brain.installed_copy", str(brain.skill_dir), f"This is an installed copy of {brain.name}. A change here never reaches its repository.", fix))
+
+
+def in_git(folder: Path) -> bool:
+    result = subprocess.run(["git", "-C", str(folder), "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+    return result.returncode == 0 and result.stdout.strip() == "true"
 
 
 def load_config(path: Path) -> dict:

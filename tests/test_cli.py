@@ -73,13 +73,13 @@ def test_claude_install_keeps_other_hooks_and_replaces_its_own(brain, tmp_path):
     settings = work / ".claude" / "settings.local.json"
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "other-tool"}]}]}, "model": "x"}))
-    hooks.install_claude(work, brain.root)
-    hooks.install_claude(work, brain.root)
+    hooks.install_host("claude", work, brain.root)
+    hooks.install_host("claude", work, brain.root)
     data = json.loads(settings.read_text())
     stop_commands = [h["command"] for g in data["hooks"]["Stop"] for h in g["hooks"]]
     assert data["model"] == "x"
     assert stop_commands[0] == "other-tool"
-    assert len(stop_commands) == 2 and stop_commands[1].endswith(f"hook stop --project {brain.root}")
+    assert len(stop_commands) == 2 and stop_commands[1].endswith(f"hook stop --host claude --project {brain.root}")
     assert len(data["hooks"]["SessionStart"]) == 1
 
 
