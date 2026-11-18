@@ -14,13 +14,16 @@ MARKETPLACE_FILE = Path(".claude-plugin") / "marketplace.json"
 # Codex reads a plugin.json at the plugin's root and its own marketplace under .agents/plugins/.
 CODEX_PLUGIN_FILE = Path("plugin.json")
 CODEX_MARKETPLACE_FILE = Path(".agents") / "plugins" / "marketplace.json"
-# Claude Code reads its own folder. Codex and Cursor read the neutral Agent Skills folder, and Cursor reads both.
-HARNESS_SKILLS = {"claude": Path("~/.claude/skills"), "codex": Path("~/.agents/skills"), "cursor": Path("~/.agents/skills"), "agents": Path("~/.agents/skills")}
 
 
 def git(folder: Path, *args: str) -> str | None:
     result = subprocess.run(["git", "-C", str(folder), *args], capture_output=True, text=True)
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def git_root_or_cwd() -> Path:
+    top = git(Path.cwd(), "rev-parse", "--show-toplevel")
+    return Path(top) if top else Path.cwd()
 
 
 def skill_meta(brain: Brain) -> dict:
@@ -144,10 +147,20 @@ def drift(brain: Brain) -> list[Finding]:
     return findings
 
 
-def install(brain: Brain, harness: str | None, to: Path | None, copy: bool) -> tuple[Path, list[str]]:
-    if bool(harness) == bool(to):
-        raise BrainError(Finding("install.where", "install", "Name one place: --harness or --to.", f"Use --harness {'|'.join(HARNESS_SKILLS)}, or --to <skills folder>."), outcome="error")
-    folder = (HARNESS_SKILLS[harness] if harness else to).expanduser()
+def install(brain: Brain, harness: str | None, to: Path | None, copy: bool, user: bool = False, project: Path | None = None) -> tuple[Path, list[str]]:
+    from . import harness as harnesses
+
+    if harness and to:
+        raise BrainError(Finding("install.where", "install", "Name one place: --harness or --to.", "Leave out one of them."), outcome="error")
+    if not harness and not to:
+        harness = harnesses.detect()
+        if harness is None:
+            raise BrainError(Finding("install.where", "install", "This harness is not one brain knows, so it cannot pick a skills folder.", f"Pass --harness {'|'.join(harnesses.NAMES)}, or --to <skills folder>."), outcome="error")
+    if harness:
+        base = (project or git_root_or_cwd()).resolve()
+        folder = harnesses.USER_SKILLS[harness].expanduser() if user else base / harnesses.PROJECT_SKILLS[harness]
+    else:
+        folder = to.expanduser()
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / brain.name
     warnings = []

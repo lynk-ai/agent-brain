@@ -97,3 +97,29 @@ def test_team_init_seeds_no_routine(repo):
     brain = scaffold.init(repo / "t", "team-agent", team=True)
     assert not list((brain.references / "routines").glob("*.md"))
     assert (brain.references / "procedures" / "run-the-dream.md").exists()
+
+
+def test_harness_detection_prefers_the_specific_harness():
+    from agent_brain import harness
+
+    assert harness.detect({"CODEX_THREAD_ID": "1", "CLAUDECODE": "1"}) == "codex"
+    assert harness.detect({"CLAUDECODE": "1"}) == "claude"
+    assert harness.detect({}) is None
+
+
+def test_install_and_hooks_default_to_the_running_harness(repo, brain, monkeypatch, capsys):
+    from agent_brain.cli import main
+
+    monkeypatch.setenv("CODEX_THREAD_ID", "t")
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.chdir(repo)
+    assert main(["install", "--project", str(brain.root)]) == 0
+    out = capsys.readouterr().out
+    assert (repo / ".agents/skills/help-center-writer").is_symlink()
+    assert "harness: Codex" in out and "brain install --harness claude" in out and "Ask the person" in out
+    monkeypatch.setattr(hooks, "brain_command", lambda: "brain")
+    assert main(["hooks", "install", "--project", str(brain.root), "--no-git"]) == 0
+    out = capsys.readouterr().out
+    assert (repo / ".codex/hooks.json").exists() and not (repo / ".claude").exists()
+    assert "Codex hooks" in out and "brain hooks install --harness claude" in out

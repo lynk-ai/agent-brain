@@ -6,7 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, checks, hooks, importer, index, plugin, scaffold
+from . import __version__, checks, harness, hooks, importer, index, plugin, scaffold
 from .brain import find, find_all, require_writable
 from .output import BLOCK, BrainError, Finding, Result, render_json, render_text
 from .records import KINDS, load
@@ -129,16 +129,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("ref", help="rules/<id>, procedures/<id>, feedback/<id>, or a bare id")
     command("status", cmd_status, "Counts, pending feedback and proposed records: what the dream starts from.")
     p = command("install", cmd_install, "Install the skill in a harness: a link to this checkout, or a copy.")
-    p.add_argument("--harness", choices=tuple(plugin.HARNESS_SKILLS), help="install in this harness's skills folder for the user")
+    p.add_argument("--harness", choices=tuple(harness.NAMES), help="the harness to install in; default the one running this command")
+    p.add_argument("--user", action="store_true", help="install in the harness's skills folder for the user, not for this project")
     p.add_argument("--to", type=Path, help="install in this skills folder")
     p.add_argument("--copy", action="store_true", help="copy the skill, for a harness that cannot follow a link; feedback then goes to a clone")
     command("plugin", cmd_plugin, "Write the brain's plugin.json and its line in the repository's marketplace.")
 
-    p = command("hooks", None, "Install the checks into git and Claude Code.")
+    p = command("hooks", None, "Install the checks into git and the harness.")
     hsub = p.add_subparsers(title="hooks commands", metavar="<action>")
     hp = hsub.add_parser("install", help="Install the pre-commit hook, and the Claude Code Stop and SessionStart hooks.", parents=[common])
     hp.set_defaults(handler=cmd_hooks_install, command="hooks install")
     hp.add_argument("--repo", type=Path, help="the git repository's top folder; default the brain's repository")
+    hp.add_argument("--harness", action="append", choices=tuple(harness.NAMES), default=[], help="a harness to install hooks for; repeat for more; default the one running this command")
+    hp.add_argument("--dir", type=Path, help="the project folder where the agent's sessions start; default this repository")
     hp.add_argument("--claude", type=Path, help="the project folder where the agent's Claude Code sessions start")
     hp.add_argument("--codex", type=Path, help="the project folder where the agent's Codex sessions start")
     hp.add_argument("--cursor", type=Path, help="the project folder where the agent's Cursor sessions start")
@@ -344,8 +347,14 @@ def cmd_status(args) -> Result:
 
 def cmd_install(args) -> Result:
     brain = find(args.project)
-    target, lines = plugin.install(brain, args.harness, args.to, args.copy)
+    chosen = args.harness or (None if args.to else harness.detect())
+    target, lines = plugin.install(brain, chosen, args.to, args.copy, user=args.user)
     kind = "a copy of" if args.copy else "a link to"
+    if chosen:
+        lines.insert(0, f"  harness: {harness.NAMES[chosen]}" + ("" if args.harness else " (the one running this command)"))
+        rest = harness.others([chosen])
+        lines.append("  other harnesses it supports: " + ", ".join(f"{harness.NAMES[h]} (brain install --harness {h})" for h in rest))
+        lines.append("  Ask the person whether the brain should also run in any of them. Install there only on a yes.")
     return Result(
         "install", "ok", f"{target} is {kind} {brain.skill_dir}.", lines=lines,
         next=("start a fresh session and ask one question only the brain answers", "the answer must cite a rule or procedure by its title"),
@@ -384,12 +393,25 @@ def cmd_hooks_install(args) -> Result:
     if not args.no_git:
         repo = (args.repo or scaffold.git_root(brain.root) or brain.root).resolve()
         lines.append(f"  pre-commit: {hooks.install_git(repo)}")
-    for host in hooks.HOSTS:
-        folder = getattr(args, host)
-        if folder:
-            lines.append(f"  {host}: {hooks.install_host(host, folder.resolve(), brain.root)}")
+    targets = {host: getattr(args, host) for host in hooks.HOSTS if getattr(args, host)}
+    folder = (args.dir or plugin.git_root_or_cwd()).resolve()
+    detected = None
+    if not targets and not args.harness:
+        detected = harness.detect()
+        if detected:
+            targets[detected] = folder
+    for host in args.harness:
+        targets.setdefault(host, folder)
+    for host, where in targets.items():
+        lines.append(f"  {harness.NAMES[host]} hooks: {hooks.install_host(host, where.resolve(), brain.root)}")
     if not lines:
-        raise BrainError(Finding("hooks.nothing", "hooks install", "Nothing to install.", "Pass --claude, --codex or --cursor <folder>, or leave out --no-git."), outcome="error")
+        raise BrainError(Finding("hooks.nothing", "hooks install", "Nothing to install: this harness is not one brain knows.", f"Pass --harness {'|'.join(harness.NAMES)}, or leave out --no-git."), outcome="error")
+    rest = harness.others(list(targets))
+    if detected:
+        lines.insert(0, f"  harness: {harness.NAMES[detected]} (the one running this command)")
+    if rest:
+        lines.append("  other harnesses it supports: " + ", ".join(f"{harness.NAMES[h]} (brain hooks install --harness {h})" for h in rest))
+        lines.append("  Ask the person whether the brain should also run in any of them. Install there only on a yes.")
     return Result("hooks install", "ok", "Hooks installed.", lines=lines)
 
 

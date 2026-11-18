@@ -18,8 +18,8 @@ A brain is a folder with a `brain.yaml`. One repository can hold one brain or ma
 ```sh
 brain init help-center-writer --path brains/help-center-writer
 brain check --project brains/help-center-writer   # fill each TODO: it reports
-brain install --project brains/help-center-writer --harness claude
-brain hooks install --project brains/help-center-writer --claude ~/code/docs-site
+brain install --project brains/help-center-writer        # the skill, for the harness running this command
+brain hooks install --project brains/help-center-writer  # the pre-commit hook, and that harness's hooks
 ```
 
 ```text
@@ -50,10 +50,10 @@ brains/help-center-writer/
 | `brain check [--all] [--staged]` | Runs every check. `--all` checks every brain under the folder. `--staged` checks what git has staged. |
 | `brain trace <ref>` | Shows a record, the feedback behind it and what uses it. |
 | `brain status` | Counts, new and pending feedback, and proposed records. The dream starts here. |
-| `brain install --harness claude\|codex\|cursor\|agents` or `--to <folder>` | Links the skill into a harness's skills folder. `--copy` copies it, for a harness that cannot follow a link. Warns when the checkout is not on the default branch. |
+| `brain install [--harness claude\|codex\|cursor] [--user]` or `--to <folder>` | Links the skill into the project's skills folder of the harness running the command (Claude Code: `.claude/skills`, Codex and Cursor: `.agents/skills`), or another harness, or the user's folder. `--copy` copies it, for a harness that cannot follow a link. Lists the other harnesses it supports, so the agent asks the person about them. Warns when the checkout is not on the default branch. |
 | `brain plugin` | Writes the brain's `.claude-plugin/plugin.json`, its `source` in brain.yaml, and its line in the repository's `.claude-plugin/marketplace.json`. |
 | `brain import darkmatter <brain> --into <folder>` | Imports a darkmatter agent brain. `--agent` takes the agent's doc, `--rename OLD=NEW` renames a record, `--sibling 'lynk-*-playbook'` rewrites paths into brains that move with it. Reports every dropped field and every gap. |
-| `brain hooks install [--claude\|--codex\|--cursor <folder>]` | Installs the pre-commit hook, and each harness's Stop hook (and SessionStart for Claude Code and Codex). |
+| `brain hooks install [--harness claude\|codex\|cursor] [--dir <folder>]` | Installs the pre-commit hook, and the Stop hook (and SessionStart for Claude Code and Codex) of the harness running the command, or of each `--harness`. Lists the other harnesses it supports, so the agent asks the person about them. |
 
 Every command takes `--project`, before or after the command (the brain's folder, its installed skill folder, or a folder inside it) and `--json`. The first line of the output is `<outcome>: <headline>`. Each finding is `<file>: <message> Fix: <fix> [<code>]`. The last line is `Next: <command>  (<why>)`. Exit codes: 0 ok, 3 failed or refused, 2 error.
 
