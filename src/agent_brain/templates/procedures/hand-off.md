@@ -2,7 +2,7 @@
 name: Hand work off
 description: Pass work outside your lane to the role that owns it, with what you know and what you did not do.
 status: active
-trigger: A request falls outside your lane or touches an anti-job in agent.md.
+trigger: A request falls outside your lane or touches your Never list.
 outputs: One handoff to a role, and one line to the person who asked.
 topics: [working-with-others]
 ---
