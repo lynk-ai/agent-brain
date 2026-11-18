@@ -24,9 +24,10 @@ def install_git(repo: Path) -> Path:
     hook = repo / ".git" / "hooks" / "pre-commit"
     if not (repo / ".git").is_dir():
         raise BrainError(Finding("hooks.no_git", str(repo), "This folder is not the top of a git repository.", "Run git init, or pass --repo with the repository's top folder."), outcome="error")
-    script = f"#!/bin/sh\n{MANAGED}\nexec {brain_command()} check --staged --project {shlex.quote(str(repo))}\n"
+    # The hook runs in whichever worktree commits, so it checks that worktree, not the one it was installed from.
+    script = f'#!/bin/sh\n{MANAGED}\nexec {brain_command()} check --staged --project "$(git rev-parse --show-toplevel)"\n'
     if hook.exists() and MANAGED not in hook.read_text():
-        raise BrainError(Finding("hooks.pre_commit_exists", str(hook), "A pre-commit hook that brain does not manage is already there.", f"Add this line to it: {brain_command()} check --staged --project {repo}"))
+        raise BrainError(Finding("hooks.pre_commit_exists", str(hook), "A pre-commit hook that brain does not manage is already there.", f'Add this line to it: {brain_command()} check --staged --project "$(git rev-parse --show-toplevel)"'))
     hook.parent.mkdir(parents=True, exist_ok=True)
     hook.write_text(script)
     hook.chmod(0o755)

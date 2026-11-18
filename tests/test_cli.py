@@ -130,3 +130,18 @@ def test_stop_hook_names_the_brain_folder_for_its_fixes(brain):
     add_correction(brain)
     reason = hooks.stop({"stop_hook_active": False}, [brain])["reason"]
     assert f"--project {brain.root}" in reason
+
+
+def test_pre_commit_hook_checks_the_worktree_that_commits(repo, brain, monkeypatch, tmp_path):
+    monkeypatch.setattr(hooks, "brain_command", lambda: f"{sys.executable} -m agent_brain")
+    hooks.install_git(repo)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"], check=True)
+    add_correction(brain)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    other = tmp_path / "other-worktree"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "side", str(other)], check=True)
+    (other / "note.txt").write_text("x")
+    subprocess.run(["git", "-C", str(other), "add", "note.txt"], check=True)
+    result = subprocess.run(["git", "-C", str(other), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
