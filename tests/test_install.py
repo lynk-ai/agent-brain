@@ -19,7 +19,13 @@ def test_plugin_writes_plugin_json_source_and_marketplace_entry(repo, brain):
     market = repo / ".claude-plugin" / "marketplace.json"
     market.parent.mkdir()
     market.write_text(json.dumps({"name": "acme", "plugins": [{"name": "other", "source": "./x"}]}))
+    codex = repo / ".agents" / "plugins" / "marketplace.json"
+    codex.parent.mkdir(parents=True)
+    codex.write_text(json.dumps({"name": "acme", "plugins": [{"name": "help-center-writer", "source": {"source": "local", "path": "./old/release"}, "category": "x"}]}))
     plugin.write(brain)
+    codex_entry = json.loads(codex.read_text())["plugins"][0]
+    assert codex_entry["source"]["path"] == "./brains/hcw" and codex_entry["category"] == "x"
+    assert json.loads((brain.root / "plugin.json").read_text())["skills"] == "./"
     data = json.loads((brain.root / ".claude-plugin" / "plugin.json").read_text())
     assert data["name"] == "help-center-writer" and data["skills"] == "./"
     entries = {p["name"]: p for p in json.loads(market.read_text())["plugins"]}

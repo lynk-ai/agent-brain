@@ -11,6 +11,9 @@ from .records import split_front_matter
 
 PLUGIN_FILE = Path(".claude-plugin") / "plugin.json"
 MARKETPLACE_FILE = Path(".claude-plugin") / "marketplace.json"
+# Codex reads a plugin.json at the plugin's root and its own marketplace under .agents/plugins/.
+CODEX_PLUGIN_FILE = Path("plugin.json")
+CODEX_MARKETPLACE_FILE = Path(".agents") / "plugins" / "marketplace.json"
 # Claude Code reads its own folder. Codex and Cursor read the neutral Agent Skills folder, and Cursor reads both.
 HARNESS_SKILLS = {"claude": Path("~/.claude/skills"), "codex": Path("~/.agents/skills"), "cursor": Path("~/.agents/skills"), "agents": Path("~/.agents/skills")}
 
@@ -58,6 +61,13 @@ def marketplace_of(brain: Brain) -> Path | None:
     return None
 
 
+def codex_marketplace_of(brain: Brain) -> Path | None:
+    top = git(brain.root, "rev-parse", "--show-toplevel")
+    if top and (Path(top) / CODEX_MARKETPLACE_FILE).is_file():
+        return Path(top) / CODEX_MARKETPLACE_FILE
+    return None
+
+
 def plugin_entry(brain: Brain, marketplace: Path) -> dict:
     meta = skill_meta(brain)
     rel = brain.root.resolve().relative_to(marketplace.parent.parent.resolve())
@@ -69,14 +79,27 @@ def write(brain: Brain) -> list[str]:
     if not meta.get("description"):
         raise BrainError(Finding("skill.description", brain.rel(brain.skill_file), "SKILL.md has no description.", "Write the description first."))
     lines = []
-    plugin_path = brain.root / PLUGIN_FILE
-    plugin_path.parent.mkdir(exist_ok=True)
-    plugin = json.loads(plugin_path.read_text()) if plugin_path.is_file() else {}
-    plugin.update({"name": brain.name, "description": meta["description"], "skills": "./"})
-    plugin_path.write_text(json.dumps(plugin, indent=2) + "\n")
-    lines.append(f"  plugin: {plugin_path}")
+    for relative in (PLUGIN_FILE, CODEX_PLUGIN_FILE):
+        plugin_path = brain.root / relative
+        plugin_path.parent.mkdir(exist_ok=True)
+        plugin = json.loads(plugin_path.read_text()) if plugin_path.is_file() else {}
+        plugin.update({"name": brain.name, "description": meta["description"], "skills": "./"})
+        plugin_path.write_text(json.dumps(plugin, indent=2) + "\n")
+        lines.append(f"  plugin: {plugin_path}")
     source = ensure_source(brain)
     lines.append(f"  source: {source['repo']} {source['path']}" if source else "  source: none (no git remote named origin)")
+    codex = codex_marketplace_of(brain)
+    if codex is not None:
+        data = json.loads(codex.read_text())
+        rel = f"./{brain.root.resolve().relative_to(codex.parent.parent.parent.resolve())}"
+        for existing in data.setdefault("plugins", []):
+            if existing.get("name") == brain.name:
+                existing.setdefault("source", {})["path"] = rel
+                break
+        else:
+            data["plugins"].append({"name": brain.name, "source": {"source": "local", "path": rel}})
+        codex.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        lines.append(f"  Codex marketplace: {codex}")
     marketplace = marketplace_of(brain)
     if marketplace is None:
         lines.append(f"  marketplace: none found at the repository's {MARKETPLACE_FILE}; nothing listed")
@@ -101,9 +124,17 @@ def drift(brain: Brain) -> list[Finding]:
     if not plugin_path.is_file():
         return findings
     meta = skill_meta(brain)
-    plugin = json.loads(plugin_path.read_text())
-    if plugin.get("name") != brain.name or plugin.get("description") != meta.get("description") or plugin.get("skills") != "./":
-        findings.append(Finding("plugin.drift", brain.rel(plugin_path), "plugin.json does not match the brain's name, description or skill folder.", "Run brain plugin."))
+    for relative in (PLUGIN_FILE, CODEX_PLUGIN_FILE):
+        path = brain.root / relative
+        plugin = json.loads(path.read_text()) if path.is_file() else {}
+        if plugin.get("name") != brain.name or plugin.get("description") != meta.get("description") or plugin.get("skills") != "./":
+            findings.append(Finding("plugin.drift", brain.rel(path), f"{relative} does not match the brain's name, description or skill folder.", "Run brain plugin."))
+    codex = codex_marketplace_of(brain)
+    if codex is not None:
+        rel = f"./{brain.root.resolve().relative_to(codex.parent.parent.parent.resolve())}"
+        listed = next((p for p in json.loads(codex.read_text()).get("plugins", []) if p.get("name") == brain.name), None)
+        if listed is not None and (listed.get("source") or {}).get("path") != rel:
+            findings.append(Finding("plugin.drift", str(codex), f"The Codex marketplace entry for {brain.name} does not point at the brain.", "Run brain plugin."))
     marketplace = marketplace_of(brain)
     if marketplace is not None:
         listed = next((p for p in json.loads(marketplace.read_text()).get("plugins", []) if p.get("name") == brain.name), None)
