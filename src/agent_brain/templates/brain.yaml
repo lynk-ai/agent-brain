@@ -3,4 +3,4 @@ name: {{name}}
 pending_days: 14
 checked_days: 90
 # Harness details the skill may not name. They belong in harness/<harness>/.
-harness_names: [".claude/", "CLAUDE.md", ".codex/", ".cursor/", ".agents/skills", "settings.local.json"]
+harness_names: [".claude/", ".codex/", ".cursor/", ".agents/skills", "settings.local.json"]

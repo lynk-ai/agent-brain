@@ -1,3 +1,4 @@
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,7 @@ COPY_MARKER = ".brain-source.yaml"
 DEFAULTS = {
     "pending_days": 14,
     "checked_days": 90,
-    "harness_names": [".claude/", "CLAUDE.md", ".codex/", ".cursor/", ".agents/skills", "settings.local.json"],
+    "harness_names": [".claude/", ".codex/", ".cursor/", ".agents/skills", "settings.local.json"],
 }
 
 
@@ -75,12 +76,15 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
 
 
 def find_all(start: Path) -> list[Brain]:
-    # One repository may hold many brains; each folder with a brain.yaml is one.
+    # One repository may hold many brains; each folder with a brain.yaml is one, and none sits inside another.
     brains = []
-    for config_path in sorted(start.resolve().rglob(CONFIG_FILE)):
-        if SKIP_DIRS.isdisjoint(config_path.relative_to(start.resolve()).parts):
-            brains.append(Brain(root=config_path.parent, config=load_config(config_path)))
-    return brains
+    for folder, dirs, files in os.walk(start.resolve()):
+        if CONFIG_FILE in files:
+            brains.append(Brain(root=Path(folder), config=load_config(Path(folder) / CONFIG_FILE)))
+            dirs[:] = []
+            continue
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
+    return sorted(brains, key=lambda b: str(b.root))
 
 
 def require_writable(brain: Brain) -> None:

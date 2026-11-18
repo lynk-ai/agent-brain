@@ -176,7 +176,7 @@ def test_a_broken_link_in_the_skill_blocks(brain):
 
 def test_brain_yaml_levels_change_or_turn_off_a_check(brain):
     procedure = brain.references / "procedures" / "hand-off.md"
-    procedure.write_text(procedure.read_text() + "\nThe project's CLAUDE.md file.\n")
+    procedure.write_text(procedure.read_text() + "\nThe project's .claude/ folder.\n")
     assert codes(brain) == ["core.harness_name"]
     config = brain.root / "brain.yaml"
     config.write_text(config.read_text() + "levels:\n  core.harness_name: warn\n")
@@ -225,3 +225,9 @@ def test_no_seed_brain_warns_without_take_feedback(repo):
     assert "You are Mila." in brain.skill_file.read_text()
     assert not list((brain.references / "procedures").glob("*.md"))
     assert "procedure.no_take_feedback" in [f.code for f in checks.run(brain)]
+
+
+def test_links_in_code_are_examples(brain):
+    procedure = brain.references / "procedures" / "hand-off.md"
+    procedure.write_text(procedure.read_text() + "\nEmbed `![d](../../assets/x.png)` like this.\n\n```md\n[a](../nowhere.md)\n```\n")
+    assert codes(brain) == []

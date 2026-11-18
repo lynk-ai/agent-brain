@@ -238,9 +238,13 @@ def check_text(brain: Brain) -> list[Finding]:
         return findings
     harness_names = [n for n in brain.config.get("harness_names") or [] if isinstance(n, str) and n]
     for path in sorted(brain.skill_dir.rglob("*.md")):
+        fenced = False
         for number, line in enumerate(path.read_text().splitlines(), start=1):
             where = f"{brain.rel(path)}:{number}"
-            for target in LINK_PATTERN.findall(line):
+            if line.lstrip().startswith("```"):
+                fenced = not fenced
+            # A link shown as an example, in a code block or a code span, is text, not a link.
+            for target in [] if fenced else LINK_PATTERN.findall(re.sub(r"`[^`]*`", " ", line)):
                 if not resolves(path, target):
                     findings.append(Finding("link.broken", where, f"The link {target} does not resolve.", "Point it at a file inside the skill, or remove it."))
             if UNFINISHED in line:
