@@ -109,19 +109,30 @@ def add_feedback(
     return record
 
 
-def set_disposition(brain: Brain, feedback_id: str, disposition: str, reason: str) -> Record:
+def set_disposition(brain: Brain, feedback_id: str, disposition: str, reason: str, pointers: list[str] = ()) -> Record:
     records = load(brain)
     fb = require(records, f"feedback/{feedback_id}")
     if disposition == "kept":
         raise BrainError(Finding("feedback.use_link", feedback_id, "kept needs the record it became.", f"Run brain link {feedback_id} rules/<id>."), outcome="error")
     if disposition not in FEEDBACK.fields["disposition"].choices:
         raise BrainError(Finding("feedback.disposition", disposition, "Unknown disposition.", "Use pending, one-off, elsewhere or declined."), outcome="error")
-    if as_list(fb.meta.get("kept_in")):
+    if fb.meta.get("disposition") == "kept" and as_list(fb.meta.get("kept_in")):
         raise BrainError(Finding("feedback.linked", feedback_id, "It is linked to records.", f"Run brain unlink {feedback_id} <record> for each one first."))
+    if disposition == "elsewhere" and not pointers:
+        raise BrainError(Finding("feedback.elsewhere_pointer", feedback_id, "elsewhere needs where the lesson lives.", "Pass --to <kind>:<name>, with kind brain, plugin, book or doc, such as --to plugin:lynk-for-analyst."), outcome="error")
+    if pointers and disposition != "elsewhere":
+        raise BrainError(Finding("feedback.pointer_not_elsewhere", feedback_id, "--to is only for elsewhere.", "Leave out --to."), outcome="error")
+    from .checks import pointer_problem
+
+    for pointer in pointers:
+        problem = pointer_problem(brain, pointer)
+        if problem:
+            raise BrainError(Finding("feedback.elsewhere_pointer", pointer, problem, "Name a place that exists."), outcome="error")
     if not reason.strip():
         raise BrainError(Finding("feedback.no_reason", feedback_id, f"{disposition} needs a reason.", "Pass --reason \"<why>\"."), outcome="error")
     refuse_sensitive("--reason", reason)
     fb.meta["disposition"] = disposition
+    fb.meta["kept_in"] = list(pointers)
     fb.body = add_to_section(fb.body, "Context", f"{dt.date.today().isoformat()}, {disposition}: {reason.strip()}")
     write_record(fb)
     return fb

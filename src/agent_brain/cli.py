@@ -94,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     fp.add_argument("id")
     fp.add_argument("disposition", choices=("pending", "one-off", "elsewhere", "declined"))
     fp.add_argument("--reason", default="")
+    fp.add_argument("--to", action="append", default=[], metavar="KIND:NAME", help="for elsewhere: where the lesson lives, as brain:, plugin:, book: or doc:<path>; repeat for more")
     fp = fsub.add_parser("list", help="List feedback.", parents=[common])
     fp.set_defaults(handler=cmd_feedback_list, command="feedback list")
     fp.add_argument("--pending", action="store_true", help="only feedback that is new or pending")
@@ -189,7 +190,7 @@ def cmd_feedback_add(args) -> Result:
 def cmd_feedback_set(args) -> Result:
     brain = find(args.project)
     require_writable(brain)
-    record = scaffold.set_disposition(brain, args.id, args.disposition, args.reason)
+    record = scaffold.set_disposition(brain, args.id, args.disposition, args.reason, args.to)
     return Result("feedback set", "ok", f"Feedback {record.id} is {args.disposition}.", value={"id": record.id}, next=("brain check", "confirm the brain is whole"))
 
 

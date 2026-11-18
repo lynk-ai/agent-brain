@@ -121,6 +121,11 @@ def check_links(brain: Brain, records: Records) -> list[Finding]:
         for target_ref in as_list(fb.meta.get("kept_in")):
             if target_ref == "agent":
                 continue
+            if fb.meta.get("disposition") == "elsewhere":
+                problem = pointer_problem(brain, target_ref)
+                if problem:
+                    findings.append(Finding("feedback.elsewhere_pointer", where, problem, POINTER_FIX))
+                continue
             folder = target_ref.partition("/")[0]
             target = records.get(target_ref)
             if folder not in LINKABLE or target is None:
@@ -160,7 +165,9 @@ def check_feedback(brain: Brain, records: Records, today: dt.date) -> list[Findi
         kept_in = as_list(fb.meta.get("kept_in"))
         if disposition == "kept" and not kept_in:
             findings.append(Finding("feedback.kept_without_record", where, "It is kept, but kept_in names no record.", f"Run brain link {fb.id} rules/<id>, or brain new rule <id> --feedback {fb.id}."))
-        if disposition != "kept" and kept_in:
+        if disposition == "elsewhere" and not kept_in:
+            findings.append(Finding("feedback.elsewhere_pointer", where, "It is elsewhere, but kept_in does not say where.", POINTER_FIX))
+        if disposition not in ("kept", "elsewhere") and kept_in:
             findings.append(Finding("feedback.linked_not_kept", where, f"It is {disposition}, but kept_in names records.", f"Run brain unlink {fb.id} <record> for each record, or link it with brain link."))
         if disposition == "new":
             findings.append(
@@ -262,6 +269,33 @@ def check_text(brain: Brain) -> list[Finding]:
                 if name in line:
                     findings.append(Finding("core.harness_name", where, f"The core names {name!r}, a harness detail.", "Keep harness details in harness/<harness>/, outside the skill."))
     return findings
+
+
+POINTER_KINDS = ("brain", "plugin", "book", "doc")
+POINTER_FIX = "Run brain feedback set <id> elsewhere --to <kind>:<name> --reason \"<why>\", with kind brain, plugin, book or doc."
+
+
+def pointer_problem(brain: Brain, pointer: str) -> str:
+    # A lesson kept elsewhere names where: a brain or plugin in this repository, a book, or a file (doc) here.
+    kind, _, target = pointer.partition(":")
+    if kind not in POINTER_KINDS or not target:
+        return f"kept_in names {pointer!r}; an elsewhere pointer is <kind>:<name>."
+    from .plugin import git, marketplace_of
+
+    top = git(brain.root, "rev-parse", "--show-toplevel")
+    if kind == "doc" and top and not (Path(top) / target).exists():
+        return f"kept_in names {pointer!r}, but {target} does not exist in this repository."
+    if kind == "brain" and top and not ((Path(top) / "brains" / target).is_dir() or (Path(top) / target).is_dir()):
+        return f"kept_in names {pointer!r}, but no folder {target} exists in this repository."
+    if kind == "plugin":
+        market = marketplace_of(brain)
+        if market is not None:
+            import json
+
+            names = {p.get("name") for p in json.loads(market.read_text()).get("plugins", [])}
+            if target not in names:
+                return f"kept_in names {pointer!r}, but the marketplace lists no plugin {target}."
+    return ""
 
 
 def pending_since(context: str) -> dt.date | None:

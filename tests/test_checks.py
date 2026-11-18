@@ -231,3 +231,23 @@ def test_links_in_code_are_examples(brain):
     procedure = brain.references / "procedures" / "hand-off.md"
     procedure.write_text(procedure.read_text() + "\nEmbed `![d](../../assets/x.png)` like this.\n\n```md\n[a](../nowhere.md)\n```\n")
     assert codes(brain) == []
+
+
+def test_elsewhere_names_where_the_lesson_lives(brain):
+    import json
+    import pytest
+    from agent_brain.output import BrainError
+
+    market = brain.root.parent.parent / ".claude-plugin" / "marketplace.json"
+    market.parent.mkdir(exist_ok=True)
+    market.write_text(json.dumps({"plugins": [{"name": "acme-for-writer", "source": "./x"}]}))
+    fid = add_correction(brain)
+    with pytest.raises(BrainError):
+        scaffold.set_disposition(brain, fid, "elsewhere", "lives in the plugin")
+    with pytest.raises(BrainError):
+        scaffold.set_disposition(brain, fid, "elsewhere", "lives in the plugin", ["plugin:nope"])
+    record = scaffold.set_disposition(brain, fid, "elsewhere", "lives in the plugin", ["plugin:acme-for-writer", "book:write-help-articles"])
+    assert record.meta["kept_in"] == ["plugin:acme-for-writer", "book:write-help-articles"]
+    assert codes(brain) == []
+    set_meta(brain.references / "feedback" / f"{fid}.md", kept_in=[])
+    assert "feedback.elsewhere_pointer" in codes(brain)

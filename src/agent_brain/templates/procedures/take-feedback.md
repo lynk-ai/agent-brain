@@ -14,7 +14,7 @@ topics: [upkeep]
 4. If it changes what you may do, propose the change to agent.md for the decider, and run `brain link <id> agent`. Stop.
 5. If an active rule already says it, run `brain link <id> rules/<rule>`, and tell the decider that this rule failed. Do not write a second rule.
 6. If it contradicts an active rule or another person, write both side by side for the decider. Keep the current rule, and run `brain feedback set <id> pending --reason "<the conflict>"`.
-7. Otherwise decide: one-off, pending (a single edit that may not generalise), elsewhere, declined or kept. For each but kept, run `brain feedback set <id> <disposition> --reason "<why>"`.
+7. Otherwise decide: one-off, pending (a single edit that may not generalise), elsewhere, declined or kept. For each but kept, run `brain feedback set <id> <disposition> --reason "<why>"`. For elsewhere, also name where the lesson lives with `--to <kind>:<name>`: a brain, plugin, book or doc.
 8. For kept, read the rule index first. If a rule holds the same invariant, run `brain link <id> rules/<rule>` and tighten its words.
 9. Otherwise run `brain new rule <rule-id> --feedback <id> --topic <topic>`, with `--body-file` for its Rule, Why and How to apply sections, and replace every placeholder that `brain check` reports. Steps that run the same way each time go in `brain new procedure` instead.
 10. Run `brain check` and fix every block finding.

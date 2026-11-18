@@ -40,7 +40,7 @@ brains/help-center-writer/
 |---|---|
 | `brain init <name>` | Creates the brain, its seeded procedures and topic, the dream routine and the pre-commit hook. `--display-name Mila` names the agent. `--no-seed` seeds no procedures. |
 | `brain feedback add` | Writes a feedback record at `disposition: new`. `--id` sets its file name. Refuses a future date, a correction or incident without `--did`, and text that looks like a secret or contact details. |
-| `brain feedback set <id> <disposition> --reason` | Closes feedback as pending, one-off, elsewhere or declined, with the reason in Context. |
+| `brain feedback set <id> <disposition> --reason` | Closes feedback as pending, one-off, elsewhere or declined, with the reason in Context. Elsewhere also takes `--to <kind>:<name>` (brain, plugin, book or doc), written to `kept_in`. |
 | `brain feedback list [--pending]` | Lists feedback. |
 | `brain new rule\|procedure\|topic\|routine <id>` | Writes a record at `status: proposed`. `--feedback`, `--topic` and `--rule` repeat and must exist. `--body-file <file or ->` gives its sections. |
 | `brain set-status <ref> proposed\|active\|retired` | Sets the status and rewrites the index. Retiring needs `--reason`, which goes into Why. |
@@ -60,7 +60,7 @@ Every command takes `--project`, before or after the command (the brain's folder
 ## What `brain check` blocks
 
 - Feedback that nobody decided (`new`), and pending, one-off, elsewhere or declined feedback with no reason.
-- Kept feedback that names no record, and a rule with no feedback.
+- Kept feedback that names no record, elsewhere feedback that does not say where, and a rule with no feedback.
 - A link that does not resolve, or that points only one way.
 - A record with a missing or unknown field, a bad value, a missing body section, a bad file name or a duplicate name.
 - A SKILL.md index that differs from what `brain index` writes. A retired or proposed record is never in the index.
