@@ -187,7 +187,7 @@ def skill_shell(source: Path, name: str, display: str) -> tuple[str, dict]:
     front = yaml.safe_dump({"name": name, "description": description}, sort_keys=False, allow_unicode=True, width=1000)
     text = (
         f"---\n{front}---\n{title}\n\nYou are {display}. {paragraphs}\n\n"
-        "Your job, your limits and your voice are in [agent.md](agent.md). Your brain is your memory. Anything worth keeping goes through "
+        "Your full record is in [agent.md](agent.md). Your brain is your memory. Anything worth keeping goes through "
         "Take a piece of feedback. Harness memory is only for notes about the current task.\n\n"
         "Run every `brain` command with `--project` set to this skill's folder.\n\n"
         f"{index.START}\n{index.END}\n\n"

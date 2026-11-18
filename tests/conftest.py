@@ -25,6 +25,10 @@ def fill(brain: Brain) -> None:
     skill = brain.skill_file.read_text()
     skill = re.sub(r'description: ".*"', "description: Help-center writer's rules and procedures. Use when drafting or updating a help-center article.", skill)
     brain.skill_file.write_text(skill)
+    from agent_brain import index
+    from agent_brain.records import load
+
+    index.write(brain, load(brain))
 
 
 @pytest.fixture

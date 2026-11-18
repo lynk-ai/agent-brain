@@ -231,6 +231,11 @@ def check_skill(brain: Brain, records: Records) -> list[Finding]:
     findings += plugin.drift(brain)
     if "take-feedback" not in records.by_folder["procedures"]:
         findings.append(Finding("procedure.no_take_feedback", where, "The brain has no take-feedback procedure.", "Write procedures/take-feedback.md, so every correction has one path.", WARN))
+    current_agent = index.current_agent(text)
+    if current_agent is None:
+        findings.append(Finding("skill.agent_markers_missing", where, "SKILL.md does not carry the agent's job and limits.", "Run brain index."))
+    elif current_agent != index.render_agent(records):
+        findings.append(Finding("skill.agent_stale", where, "The job and limits in SKILL.md differ from agent.md.", "Run brain index."))
     current = index.current(text)
     if current is None:
         findings.append(Finding("skill.markers_missing", where, "SKILL.md has no index markers.", f"Add the lines {index.START} and {index.END}, then run brain index."))

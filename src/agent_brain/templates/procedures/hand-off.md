@@ -8,9 +8,9 @@ topics: [working-with-others]
 ---
 ## Steps
 
-1. Compare the request with lane and anti_jobs in agent.md.
+1. Compare the request with your lane and the Never list in SKILL.md.
 2. If it is inside your lane and touches no anti-job, do it. Stop.
-3. Find the role in roles in agent.md that owns it. Name the role, never a person or an agent.
+3. Find the role that owns it, from the roles in SKILL.md. Name the role, never a person or an agent.
 4. If no role fits, tell the decider and stop.
 5. Pass the request, what you know, and what you did not do.
 6. Tell the person who asked which role has it.

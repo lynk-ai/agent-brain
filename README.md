@@ -26,7 +26,7 @@ brain hooks install --project brains/help-center-writer  # the pre-commit hook, 
 brains/help-center-writer/
   brain.yaml                 name, warning periods, harness names the skill may not use
   help-center-writer/        THE SKILL: what a harness loads (install links to it)
-    SKILL.md                 hand-written shell, and a generated index between markers
+    SKILL.md                 hand-written shell, the agent's job and limits from agent.md, and the rules index (both generated)
     agent.md                 job, lane, anti-jobs, decider, roles, voice
     references/
       feedback/  rules/  procedures/  topics/  routines/
@@ -46,7 +46,7 @@ brains/help-center-writer/
 | `brain set-status <ref> proposed\|active\|retired` | Sets the status and rewrites the index. Retiring needs `--reason`, which goes into Why. |
 | `brain link <feedback> <rules/id\|procedures/id\|agent>` | Links both ways and marks the feedback kept. |
 | `brain unlink <feedback> <record>` | Removes the link both ways. Feedback with no link left goes back to new. |
-| `brain index` | Rewrites the SKILL.md index from the active rules and procedures. |
+| `brain index` | Rewrites SKILL.md's generated blocks: the agent's job, lane, never list, approvals, roles, decider and voice from agent.md, then the index of active rules and procedures. |
 | `brain check [--all] [--staged]` | Runs every check. `--all` checks every brain under the folder. `--staged` checks what git has staged. |
 | `brain trace <ref>` | Shows a record, the feedback behind it and what uses it. |
 | `brain status` | Counts, new and pending feedback, and proposed records. The dream starts here. |
@@ -63,7 +63,7 @@ Every command takes `--project`, before or after the command (the brain's folder
 - Kept feedback that names no record, elsewhere feedback that does not say where, and a rule with no feedback.
 - A link that does not resolve, or that points only one way.
 - A record with a missing or unknown field, a bad value, a missing body section, a bad file name or a duplicate name.
-- A SKILL.md index that differs from what `brain index` writes. A retired or proposed record is never in the index.
+- A SKILL.md agent block or index that differs from what `brain index` writes. A retired or proposed record is never in the index.
 - A SKILL.md that links feedback, has no description or one over 1,024 characters, has more than 500 lines, or whose name is not its folder's.
 - A `TODO:` placeholder, a secret, contact details or a card number, a Markdown link that does not resolve, and a harness name from `brain.yaml` anywhere in the skill. URLs and code spans are not scanned for contact details.
 - Feedback dated in the future.

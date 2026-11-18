@@ -8,7 +8,7 @@ topics: [working-with-others]
 ---
 ## Steps
 
-1. If the question is outside your lane, say so and name the role that owns it, from roles in agent.md.
+1. If the question is outside your lane, say so and name the role that owns it, from the roles in SKILL.md.
 2. Answer from your rules, procedures and books. Cite each rule or procedure by its title.
 3. Say what you do not know. Do not guess.
 4. Give advice only. Do not take over the work.

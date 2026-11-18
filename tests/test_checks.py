@@ -251,3 +251,22 @@ def test_elsewhere_names_where_the_lesson_lives(brain):
     assert codes(brain) == []
     set_meta(brain.references / "feedback" / f"{fid}.md", kept_in=[])
     assert "feedback.elsewhere_pointer" in codes(brain)
+
+
+def test_skill_carries_the_agent_job_and_limits(brain):
+    text = brain.skill_file.read_text()
+    assert "**Never:**\n- never publishes an article" in text and "**Decider:** editor" in text and "Plain, short sentences." in text
+    assert text.index("brain:agent:start") < text.index("brain:index:start")
+    brain.agent_file.write_text(brain.agent_file.read_text().replace("never publishes an article", "never deletes an article"))
+    assert "skill.agent_stale" in codes(brain)
+    index.write(brain, load(brain))
+    assert "never deletes an article" in brain.skill_file.read_text() and codes(brain) == []
+
+
+def test_index_adds_the_agent_block_to_an_older_skill(brain):
+    text = brain.skill_file.read_text()
+    start, end = text.index(index.AGENT_START), text.index(index.AGENT_END) + len(index.AGENT_END)
+    brain.skill_file.write_text(text[:start] + text[end:])
+    assert "skill.agent_markers_missing" in codes(brain)
+    index.write(brain, load(brain))
+    assert codes(brain) == []
