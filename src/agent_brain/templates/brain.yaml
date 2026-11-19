@@ -1,3 +1,4 @@
+format: 2
 name: {{name}}
 # Days after which pending feedback, and a rule's checked date, show as warnings.
 pending_days: 14

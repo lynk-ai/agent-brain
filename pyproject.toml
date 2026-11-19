@@ -1,7 +1,7 @@
 [project]
 name = "agent-brain"
-version = "0.1.0"
-description = "Keep one agent's brain, a skill in git, whole: feedback, rules, procedures and topics, linked and checked."
+version = "0.2.0"
+description = "Keep an agent's brain, or a team's brain, a skill in git, whole: feedback, rules, procedures, policies and topics, linked and checked."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

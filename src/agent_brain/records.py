@@ -113,7 +113,8 @@ AGENT = Kind(
         "display_name": Field("line", required=False),
         "description": Field("line"),
         "job": Field("str"),
-        "lane": Field("list"),
+        # Required with no team; an agent in a team has its lane in the team's lanes.md.
+        "lane": Field("list", required=False),
         "anti_jobs": Field("list"),
         "needs_approval": Field("list", required=False),
         "data": Field("list", required=False),
@@ -126,9 +127,48 @@ AGENT = Kind(
     sections=("Voice",),
 )
 
+POLICY = Kind(
+    "policy",
+    "policies",
+    {**RULE.fields, "name": Field("line", fix="Write the policy as one imperative sentence."), "feedback": Field("list", required=False)},
+    sections=("Policy", "Why", "How to apply"),
+)
+
+TEAM_ROUTINE = Kind(
+    "routine",
+    "routines",
+    {
+        **ROUTINE.fields,
+        "owner": Field("line", fix="Name an agent on the roster, from references/agents/."),
+        "procedure": Field("line", fix="Name <agent>:<procedure-id>, a procedure in that agent's brain."),
+        "status": Field("enum", choices=("active", "paused", "retired")),
+        "feedback": Field("list", required=False),
+    },
+)
+
+AGENT_ENTRY = Kind(
+    "agent entry",
+    "agents",
+    {"name": Field("line", fix="Name the agent brain: its name in brain.yaml."), "source": Field("line", fix="Give the agent brain's folder, from the repository's top folder.")},
+)
+
+LANES = Kind("lanes", "", {"feedback": Field("list", required=False)}, sections=("Lanes",))
+LANES_FILE = "lanes.md"
+LANES_REF = "lanes"
+
 KINDS = {k.folder: k for k in (FEEDBACK, RULE, PROCEDURE, TOPIC, ROUTINE)}
+TEAM_KINDS = {k.folder: k for k in (AGENT_ENTRY, FEEDBACK, POLICY, TEAM_ROUTINE, TOPIC)}
 # Feedback.kept_in and the CLI name a record as <folder>/<id>; only these may hold feedback.
 LINKABLE = ("rules", "procedures")
+TEAM_LINKABLE = ("policies", "routines", LANES_REF)
+
+
+def kinds_of(brain: Brain) -> dict[str, Kind]:
+    return TEAM_KINDS if brain.is_team else KINDS
+
+
+def linkable_of(brain: Brain) -> tuple[str, ...]:
+    return TEAM_LINKABLE if brain.is_team else LINKABLE
 
 
 @dataclass
@@ -182,8 +222,11 @@ class Records:
     by_folder: dict[str, dict[str, Record]]
     agent: Record | None
     problems: list[Finding]
+    lanes: Record | None = None
 
     def get(self, ref: str) -> Record | None:
+        if ref == LANES_REF:
+            return self.lanes
         folder, _, rid = ref.partition("/")
         return self.by_folder.get(folder, {}).get(rid)
 
@@ -193,17 +236,24 @@ class Records:
 
 def load(brain: Brain) -> Records:
     problems: list[Finding] = []
-    by_folder: dict[str, dict[str, Record]] = {folder: {} for folder in KINDS}
+    kinds = kinds_of(brain)
+    by_folder: dict[str, dict[str, Record]] = {folder: {} for folder in kinds}
+    lanes = None
     if brain.references.is_dir():
         for entry in sorted(brain.references.iterdir()):
             if entry.name.startswith("."):
                 continue
-            if entry.name not in KINDS or not entry.is_dir():
-                problems.append(
-                    Finding("record.unknown_type", brain.rel(entry), "references/ holds only feedback, rules, procedures, topics and routines.", "Move or delete it.")
-                )
+            if brain.is_team and entry.name == LANES_FILE and entry.is_file():
+                try:
+                    lanes = read_record(LANES, entry)
+                except (ValueError, yaml.YAMLError) as exc:
+                    problems.append(Finding("record.unreadable", brain.rel(entry), f"Cannot read it: {exc}.", "Start the file with YAML front matter between --- lines."))
                 continue
-            kind = KINDS[entry.name]
+            if entry.name not in kinds or not entry.is_dir():
+                held = ", ".join(kinds) + (f" and {LANES_FILE}" if brain.is_team else "")
+                problems.append(Finding("record.unknown_type", brain.rel(entry), f"references/ holds only {held}.", "Move or delete it."))
+                continue
+            kind = kinds[entry.name]
             for path in sorted(entry.iterdir()):
                 if path.name.startswith("."):
                     continue
@@ -215,12 +265,12 @@ def load(brain: Brain) -> Records:
                 except (ValueError, yaml.YAMLError) as exc:
                     problems.append(Finding("record.unreadable", brain.rel(path), f"Cannot read it: {exc}.", "Start the file with YAML front matter between --- lines."))
     agent = None
-    if brain.agent_file.is_file():
+    if not brain.is_team and brain.agent_file.is_file():
         try:
             agent = read_record(AGENT, brain.agent_file)
         except (ValueError, yaml.YAMLError) as exc:
             problems.append(Finding("record.unreadable", brain.rel(brain.agent_file), f"Cannot read it: {exc}.", "Start the file with YAML front matter between --- lines."))
-    return Records(by_folder, agent, problems)
+    return Records(by_folder, agent, problems, lanes)
 
 
 def as_date(value) -> dt.date | None:

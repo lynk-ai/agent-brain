@@ -9,11 +9,15 @@ from .output import BrainError, Finding
 
 CONFIG_FILE = "brain.yaml"
 COPY_MARKER = ".brain-source.yaml"
+# The brain.yaml format this CLI writes. A brain.yaml with no format is format 1, which reads as 2.
+FORMAT = 2
+KINDS = ("agent", "team")
 
 DEFAULTS = {
     "pending_days": 14,
     "checked_days": 90,
     "harness_names": [".claude/", ".codex/", ".cursor/", ".agents/skills", "settings.local.json"],
+    "intake_days": 14,
 }
 
 
@@ -26,6 +30,19 @@ class Brain:
     @property
     def name(self) -> str:
         return self.config["name"]
+
+    @property
+    def kind(self) -> str:
+        return self.config.get("kind") or "agent"
+
+    @property
+    def is_team(self) -> bool:
+        return self.kind == "team"
+
+    @property
+    def team(self) -> str | None:
+        value = self.config.get("team")
+        return value if isinstance(value, str) and value else None
 
     @property
     def skill_dir(self) -> Path:
@@ -113,4 +130,15 @@ def load_config(path: Path) -> dict:
         raise BrainError(Finding("brain.config", path.name, f"{CONFIG_FILE} is not valid YAML: {exc}", "Fix the YAML."), outcome="error")
     if not isinstance(data, dict) or not isinstance(data.get("name"), str):
         raise BrainError(Finding("brain.config", path.name, f"{CONFIG_FILE} has no name.", "Add name: <agent-name>."), outcome="error")
+    version = data.get("format", 1)
+    if not isinstance(version, int) or version < 1:
+        raise BrainError(Finding("brain.config", path.name, f"format must be a whole number, not {version!r}.", f"Set format: {FORMAT}."), outcome="error")
+    if version > FORMAT:
+        raise BrainError(
+            Finding("brain.format_newer", str(path), f"{CONFIG_FILE} is format {version}; this brain reads up to format {FORMAT}.", "Update brain: uv tool upgrade agent-brain."), outcome="error"
+        )
+    if data.get("kind", "agent") not in KINDS:
+        raise BrainError(Finding("brain.config", path.name, f"kind must be agent or team, not {data.get('kind')!r}.", "Set kind: team, or leave it out for an agent brain."), outcome="error")
+    if data.get("kind") == "team" and data.get("team"):
+        raise BrainError(Finding("brain.config", path.name, "A team brain has no team: field.", "Remove team:."), outcome="error")
     return {**DEFAULTS, **data}

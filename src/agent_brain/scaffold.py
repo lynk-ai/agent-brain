@@ -7,7 +7,7 @@ from . import index
 from .brain import CONFIG_FILE, Brain, load_config
 from .checks import as_list, scan_sensitive
 from .output import BrainError, Finding
-from .records import FEEDBACK, ID_PATTERN, KINDS, LINKABLE, Record, Records, load, slug, write_record
+from .records import FEEDBACK, ID_PATTERN, as_date, LANES_REF, Record, Records, kinds_of, linkable_of, load, slug, write_record
 
 TEMPLATES = resources.files("agent_brain") / "templates"
 TODO = "TODO:"
@@ -17,13 +17,8 @@ def template(relative: str, name: str, display_name: str = "") -> str:
     return (TEMPLATES / relative).read_text().replace("{{display}}", display_name or name).replace("{{name}}", name)
 
 
-def init(folder: Path, name: str, git: bool = True, seed: bool = True, display_name: str = "", team: bool = False) -> Brain:
-    if not ID_PATTERN.match(name) or len(name) > 64:
-        raise BrainError(Finding("init.bad_name", name, "A brain's name is lowercase letters, digits and single hyphens, at most 64 characters.", "Choose a name such as help-center-writer."), outcome="error")
-    if folder.exists() and any(folder.iterdir()):
-        raise BrainError(Finding("init.not_empty", str(folder), "The folder exists and is not empty.", "Choose a new folder with --path."))
-    if (folder / CONFIG_FILE).exists():
-        raise BrainError(Finding("init.exists", str(folder), "A brain is already here.", "Run brain check."))
+def init(folder: Path, name: str, git: bool = True, seed: bool = True, display_name: str = "") -> Brain:
+    check_new_folder(folder, name)
 
     skill = folder / name
     refs = skill / "references"
@@ -38,8 +33,7 @@ def init(folder: Path, name: str, git: bool = True, seed: bool = True, display_n
     (folder / CONFIG_FILE).write_text(template("brain.yaml", name))
     (skill / "SKILL.md").write_text(template("SKILL.md", name, display_name))
     (skill / "agent.md").write_text(template("agent.md", name, display_name))
-    # In a team, the team brain holds the routines; the agent brain keeps only the procedures they run.
-    for kind in (("procedures", "topics") if team else ("procedures", "topics", "routines")) if seed else ():
+    for kind in ("procedures", "topics", "routines") if seed else ():
         for source in sorted((TEMPLATES / kind).iterdir()):
             if source.name.endswith(".md"):
                 (refs / kind / source.name).write_text(template(f"{kind}/{source.name}", name))
@@ -49,6 +43,32 @@ def init(folder: Path, name: str, git: bool = True, seed: bool = True, display_n
     if git and not inside_git(folder):
         subprocess.run(["git", "init", "-q", str(folder)], check=False)
     return brain
+
+
+def init_team(folder: Path, name: str, git: bool = True) -> Brain:
+    check_new_folder(folder, name)
+    refs = folder / name / "references"
+    for sub in ("agents", "feedback", "policies", "routines", "topics"):
+        (refs / sub).mkdir(parents=True, exist_ok=True)
+        (refs / sub / ".gitkeep").write_text("")
+    (folder / "reports").mkdir(parents=True, exist_ok=True)
+    (folder / "reports" / ".gitkeep").write_text("")
+    (folder / CONFIG_FILE).write_text(template("team/brain.yaml", name))
+    (folder / name / "SKILL.md").write_text(template("team/SKILL.md", name))
+    (refs / "lanes.md").write_text(template("team/lanes.md", name))
+    (refs / "topics" / "how-the-team-works.md").write_text(template("team/topic.md", name))
+    if git and not inside_git(folder):
+        subprocess.run(["git", "init", "-q", str(folder)], check=False)
+    brain = Brain(root=folder.resolve(), config=load_config(folder / CONFIG_FILE))
+    index.write(brain, load(brain))
+    return brain
+
+
+def check_new_folder(folder: Path, name: str) -> None:
+    if not ID_PATTERN.match(name) or len(name) > 64:
+        raise BrainError(Finding("init.bad_name", name, "A brain's name is lowercase letters, digits and single hyphens, at most 64 characters.", "Choose a name such as help-center-writer."), outcome="error")
+    if folder.exists() and any(folder.iterdir()):
+        raise BrainError(Finding("init.not_empty", str(folder), "The folder exists and is not empty.", "Choose a new folder with --path."))
 
 
 def inside_git(folder: Path) -> bool:
@@ -72,6 +92,15 @@ def refuse_sensitive(field: str, text: str) -> None:
 def add_feedback(
     brain: Brain, *, name: str, words: str, source_role: str, kind: str, source: str, did: str = "", context: str = "", date: dt.date | None = None, rid: str = ""
 ) -> Record:
+    if brain.is_team:
+        heard = intake_source(brain, source)
+        # The intake keeps the person's words as the agent recorded them, so the agent's record fills what is not given.
+        words = words if words.strip() else heard.sections.get("Feedback", "")
+        name = name or str(heard.meta.get("name") or "")
+        source_role = source_role or str(heard.meta.get("from") or "")
+        kind = kind or str(heard.meta.get("kind") or "")
+        did = did or str(heard.meta.get("what_agent_did") or "")
+        date = date or as_date(heard.meta.get("date"))
     date = date or dt.date.today()
     if date > dt.date.today():
         raise BrainError(Finding("feedback.future_date", date.isoformat(), "The date is in the future.", "Pass the date the feedback was given."), outcome="error")
@@ -107,6 +136,22 @@ def add_feedback(
     record = Record(FEEDBACK, rid, folder / f"{rid}.md", meta, body)
     write_record(record)
     return record
+
+
+def intake_source(brain: Brain, source: str) -> Record:
+    from . import team
+
+    match = team.POINTER.match(source.strip())
+    if not match:
+        raise BrainError(Finding("intake.bad_source", "--source", "In a team brain, feedback is an intake: its source is brain:<agent>/<feedback-id>.", "Pass the agent's feedback record that points to the team."), outcome="error")
+    repo = team.require_repo(brain)
+    agent = next((b for b in team.brains_in(repo) if b.name == match.group(1) and not b.is_team), None)
+    heard = load(agent).by_folder["feedback"].get(match.group(2)) if agent else None
+    if heard is None:
+        raise BrainError(Finding("intake.unresolved", source, f"{source} names no feedback record in this repository.", "Name the agent's feedback record that points to the team."), outcome="error")
+    if f"brain:{brain.name}" not in as_list(heard.meta.get("kept_in")):
+        raise BrainError(Finding("intake.not_pointed", source, f"{source} does not point to brain:{brain.name}.", f"In {agent.name}'s brain, run brain feedback set {heard.id} elsewhere --to brain:{brain.name} --reason \"<why>\"."))
+    return heard
 
 
 def set_disposition(brain: Brain, feedback_id: str, disposition: str, reason: str, pointers: list[str] = ()) -> Record:
@@ -152,8 +197,8 @@ def link(brain: Brain, feedback_id: str, target_ref: str) -> tuple[Record, Recor
     records = load(brain)
     fb = require(records, f"feedback/{feedback_id}")
     target = None
-    if target_ref != "agent":
-        target = require(records, target_ref, linkable=True)
+    if target_ref != "agent" or brain.is_team:
+        target = require(records, target_ref, linkable=linkable_of(brain))
         ids = as_list(target.meta.get("feedback"))
         if feedback_id not in ids:
             target.meta["feedback"] = [*ids, feedback_id]
@@ -169,8 +214,8 @@ def link(brain: Brain, feedback_id: str, target_ref: str) -> tuple[Record, Recor
 def unlink(brain: Brain, feedback_id: str, target_ref: str) -> Record:
     records = load(brain)
     fb = require(records, f"feedback/{feedback_id}")
-    if target_ref != "agent":
-        target = require(records, target_ref, linkable=True)
+    if target_ref != "agent" or brain.is_team:
+        target = require(records, target_ref, linkable=linkable_of(brain))
         target.meta["feedback"] = [f for f in as_list(target.meta.get("feedback")) if f != feedback_id]
         write_record(target)
     fb.meta["kept_in"] = [r for r in as_list(fb.meta.get("kept_in")) if r != target_ref]
@@ -180,11 +225,14 @@ def unlink(brain: Brain, feedback_id: str, target_ref: str) -> Record:
     return fb
 
 
-def require(records: Records, ref: str, linkable: bool = False) -> Record:
+def require(records: Records, ref: str, linkable: tuple[str, ...] = ()) -> Record:
     folder = ref.partition("/")[0]
-    if linkable and folder not in LINKABLE:
-        raise BrainError(Finding("link.target", ref, "Feedback links only to rules/<id>, procedures/<id> or agent.", "Name the record as rules/<id> or procedures/<id>."), outcome="error")
+    if linkable and folder not in linkable:
+        names = "policies/<id>, routines/<id> or lanes" if LANES_REF in linkable else "rules/<id>, procedures/<id> or agent"
+        raise BrainError(Finding("link.target", ref, f"Feedback links only to {names}.", f"Name the record as {names}."), outcome="error")
     record = records.get(ref)
+    if record is None and ref == LANES_REF:
+        raise BrainError(Finding("record.not_found", ref, "The team has no lanes.md.", "Run brain index, which writes it."), outcome="error")
     if record is None:
         known = sorted(records.by_folder.get(folder, {}))
         hint = f"Known: {', '.join(known[:10])}." if known else f"There are no {folder} yet."
@@ -195,7 +243,13 @@ def require(records: Records, ref: str, linkable: bool = False) -> Record:
 def new_record(
     brain: Brain, kind_folder: str, rid: str, values: dict, feedback_ids: list[str] = (), topics: list[str] = (), rules: list[str] = (), body: str | None = None
 ) -> Record:
-    kind = KINDS[kind_folder]
+    kinds = kinds_of(brain)
+    if kind_folder not in kinds or kind_folder == "agents":
+        where = "a team brain" if brain.is_team else "an agent brain"
+        raise BrainError(Finding("new.kind", kind_folder, f"{where.capitalize()} has no {kind_folder}.", f"In {where}, write one of: {', '.join(k for k in kinds if k not in ('feedback', 'agents'))}."), outcome="error")
+    if kind_folder == "routines" and brain.team:
+        raise BrainError(Finding("new.routine_in_team", kind_folder, f"{brain.name} is in team {brain.team}, whose brain holds every routine.", f"Run brain new routine <id> in the {brain.team} team brain."))
+    kind = kinds[kind_folder]
     if not ID_PATTERN.match(rid):
         raise BrainError(Finding("record.bad_id", rid, "An id is lowercase words joined by single hyphens.", "Use an id such as check-every-screen."), outcome="error")
     path = brain.references / kind_folder / f"{rid}.md"
@@ -204,12 +258,12 @@ def new_record(
     for label, text in {**values, "body-file": body}.items():
         if isinstance(text, str):
             refuse_sensitive(f"--{label}", text)
-    if topics and kind_folder not in ("rules", "procedures"):
-        raise BrainError(Finding("new.topic", "--topic", "Only rules and procedures have topics.", "Leave out --topic."), outcome="error")
+    if topics and kind_folder not in ("rules", "procedures", "policies"):
+        raise BrainError(Finding("new.topic", "--topic", "Only rules, procedures and policies have topics.", "Leave out --topic."), outcome="error")
     if rules and kind_folder != "procedures":
         raise BrainError(Finding("new.rule", "--rule", "Only procedures list rules.", "Leave out --rule."), outcome="error")
-    if feedback_ids and kind_folder not in LINKABLE:
-        raise BrainError(Finding("new.feedback", "--feedback", "Only rules and procedures link feedback.", "Leave out --feedback."), outcome="error")
+    if feedback_ids and kind_folder not in linkable_of(brain):
+        raise BrainError(Finding("new.feedback", "--feedback", f"Only {' and '.join(linkable_of(brain)[:2])} link feedback.", "Leave out --feedback."), outcome="error")
     records = load(brain)
     for fid in feedback_ids:
         require(records, f"feedback/{fid}")
@@ -219,7 +273,7 @@ def new_record(
         require(records, f"rules/{r}")
 
     meta, skeleton = SKELETONS[kind_folder](rid, values, brain)
-    if kind_folder in ("rules", "procedures"):
+    if kind_folder in ("rules", "procedures", "policies"):
         meta["topics"] = list(topics)
     if kind_folder == "procedures":
         meta["rules"] = list(rules)
@@ -232,13 +286,13 @@ def new_record(
 
 
 def set_status(brain: Brain, ref: str, status: str, reason: str) -> Record:
-    record = require(load(brain), ref, linkable=True)
+    record = require(load(brain), ref, linkable=("policies",) if brain.is_team else ("rules", "procedures"))
     if status == "retired" and not reason.strip():
         raise BrainError(Finding("status.no_reason", ref, "Retiring needs a reason.", "Pass --reason \"<what went wrong, and when>\"."), outcome="error")
     refuse_sensitive("--reason", reason)
     record.meta["status"] = status
     if reason.strip():
-        heading = "Why" if record.kind.folder == "rules" else "Context"
+        heading = "Why" if record.kind.folder in ("rules", "policies") else "Context"
         record.body = add_to_section(record.body, heading, f"{dt.date.today().isoformat()}, {status}: {reason.strip()}")
     write_record(record)
     index.write(brain, load(brain))
@@ -283,13 +337,20 @@ def topic_skeleton(rid, v, brain):
     return meta, f"## Scope\n\n{TODO} what belongs under this topic.\n"
 
 
+def policy_skeleton(rid, v, brain):
+    meta, _ = rule_skeleton(rid, v, brain)
+    meta["name"] = todo(v.get("name"), "the policy as one imperative sentence")
+    body = f"## Policy\n\n{TODO} the invariant only, no steps.\n\n## Why\n\n{TODO} what went wrong or what the team decided, with dates.\n\n## How to apply\n\n{TODO} when it fires, one do and one don't.\n"
+    return meta, body
+
+
 def routine_skeleton(rid, v, brain):
     meta = {
         "name": todo(v.get("name"), "the routine"),
         "description": todo(v.get("description"), "one line"),
         "trigger": todo(v.get("trigger"), "a time or an event"),
-        "owner": brain.name,
-        "procedure": todo(v.get("procedure"), "the procedure id it runs"),
+        "owner": todo(v.get("owner"), "the agent on the roster that runs it") if brain.is_team else brain.name,
+        "procedure": todo(v.get("procedure"), "<agent>:<procedure-id> it runs" if brain.is_team else "the procedure id it runs"),
         "inputs": [],
         "receiver": todo(v.get("receiver"), "the role that gets the result"),
         "when_nothing_new": "Write the run log and send nothing.",
@@ -298,5 +359,5 @@ def routine_skeleton(rid, v, brain):
     return meta, ""
 
 
-SKELETONS = {"rules": rule_skeleton, "procedures": procedure_skeleton, "topics": topic_skeleton, "routines": routine_skeleton}
+SKELETONS = {"rules": rule_skeleton, "procedures": procedure_skeleton, "topics": topic_skeleton, "routines": routine_skeleton, "policies": policy_skeleton}
 

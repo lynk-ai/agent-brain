@@ -6,12 +6,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, checks, harness, hooks, importer, index, plugin, scaffold
+from . import __version__, checks, harness, hooks, index, plugin, scaffold, team
 from .brain import find, find_all, require_writable
 from .output import BLOCK, BrainError, Finding, Result, render_json, render_text
 from .records import KINDS, load
 
-DESCRIPTION = "Keep one agent's brain, a skill in git, whole: feedback, rules, procedures and topics, linked and checked."
+DESCRIPTION = "Keep an agent's brain, or a team's brain, a skill in git, whole: feedback, rules, procedures, policies and topics, linked and checked."
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -56,34 +56,22 @@ def build_parser() -> argparse.ArgumentParser:
         p.set_defaults(handler=handler, command=name)
         return p
 
-    p = command("init", cmd_init, "Create a brain: brain.yaml, the skill folder, agent.md and the seeded procedures.")
-    p.add_argument("name", help="the agent's name: lowercase words joined by hyphens")
+    p = command("init", cmd_init, "Create a brain: brain.yaml, the skill folder, agent.md and the seeded procedures. With --team, create a team brain.")
+    p.add_argument("name", help="the agent's or the team's name: lowercase words joined by hyphens")
     p.add_argument("--path", type=Path, help="the folder to create; default ./<name>")
     p.add_argument("--no-git", action="store_true", help="do not run git init or install the pre-commit hook")
     p.add_argument("--no-seed", action="store_true", help="seed no procedures, topic or routine; the brain then needs its own take-feedback")
     p.add_argument("--display-name", default="", help="what the agent is called, such as Mila; default the brain's name")
-    p.add_argument("--team", action="store_true", help="the agent works in a team whose team brain holds its routines: seed no routine")
-
-    p = command("import", None, "Import a brain from another tool.")
-    isub = p.add_subparsers(title="sources", metavar="<source>")
-    ip = isub.add_parser("darkmatter", help="Import a darkmatter agent brain: its feedback, rules, procedures, topics and skill shell.", parents=[common])
-    ip.set_defaults(handler=cmd_import_darkmatter, command="import darkmatter")
-    ip.add_argument("source", type=Path, help="the darkmatter brain's folder, the one that holds darkmatter.yaml")
-    ip.add_argument("--into", type=Path, required=True, help="the new brain's folder; it must not exist or be empty")
-    ip.add_argument("--agent", type=Path, help="the agent's darkmatter doc, such as a team brain's wiki/agents/<agent>.md")
-    ip.add_argument("--owner", default="owner", help="the decider, also recorded as who gave each imported feedback; default owner")
-    ip.add_argument("--rename", action="append", default=[], metavar="OLD=NEW", help="give a rule or procedure a new id; repeat for more")
-    ip.add_argument("--name", default="", help="the brain's name; default its darkmatter plugin's name")
-    ip.add_argument("--sibling", action="append", default=[], metavar="PATTERN", help="other brains moving in the same change, such as 'lynk-*-playbook'; their paths are rewritten")
+    p.add_argument("--team", action="store_true", help="create a team brain: the roster, lanes, policies and routines of a team of agent brains")
 
     p = command("feedback", None, "Add, decide and list feedback.")
     fsub = p.add_subparsers(title="feedback commands", metavar="<action>")
     fp = fsub.add_parser("add", help="Write a feedback record, undecided, in the same turn.", parents=[common])
     fp.set_defaults(handler=cmd_feedback_add, command="feedback add")
-    fp.add_argument("--name", required=True, help="the feedback in one sentence")
-    fp.add_argument("--from", dest="source_role", required=True, help="the person who gave it, by name or role")
-    fp.add_argument("--kind", required=True, choices=KINDS["feedback"].fields["kind"].choices)
-    fp.add_argument("--source", required=True, help="where it was said")
+    fp.add_argument("--name", default="", help="the feedback in one sentence; in a team brain, default the agent's record's")
+    fp.add_argument("--from", dest="source_role", default="", help="the person who gave it, by name or role; in a team brain, default the agent's record's")
+    fp.add_argument("--kind", default="", choices=("", *KINDS["feedback"].fields["kind"].choices), help="in a team brain, default the agent's record's")
+    fp.add_argument("--source", required=True, help="where it was said; in a team brain, brain:<agent>/<feedback-id>, the record that points here")
     fp.add_argument("--did", default="", help="what the agent had done; required for a correction or an incident")
     fp.add_argument("--text", help="the words as said; read from stdin when omitted")
     fp.add_argument("--context", default="", help="the draft, the ticket, or other context")
@@ -99,10 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
     fp.set_defaults(handler=cmd_feedback_list, command="feedback list")
     fp.add_argument("--pending", action="store_true", help="only feedback that is new or pending")
 
-    p = command("new", cmd_new, "Write a rule, procedure, topic or routine skeleton at status proposed.")
-    p.add_argument("kind", choices=("rule", "procedure", "topic", "routine"))
+    p = command("new", cmd_new, "Write a record skeleton at status proposed: a rule, procedure, topic or routine, or in a team brain a policy, routine or topic.")
+    p.add_argument("kind", choices=("rule", "procedure", "topic", "routine", "policy"))
     p.add_argument("id", help="the file name without .md: lowercase words joined by hyphens")
-    for flag in ("name", "description", "scope", "trigger", "outputs", "procedure", "receiver"):
+    for flag in ("name", "description", "scope", "trigger", "outputs", "procedure", "receiver", "owner"):
         p.add_argument(f"--{flag}")
     p.add_argument("--topic", action="append", default=[], help="a topic id; repeat for more")
     p.add_argument("--rule", action="append", default=[], help="a rule id a procedure follows; repeat for more")
@@ -110,13 +98,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--body-file", type=Path, help="the record's body (its ## sections), or - for stdin")
 
     p = command("set-status", cmd_set_status, "Set a rule's or procedure's status, write the reason, and rewrite the index.")
-    p.add_argument("ref", help="rules/<id> or procedures/<id>")
+    p.add_argument("ref", help="rules/<id> or procedures/<id>; in a team brain policies/<id>")
     p.add_argument("status", choices=("proposed", "active", "retired"))
     p.add_argument("--reason", default="", help="required for retired; added to the rule's Why")
 
     p = command("link", cmd_link, "Link a feedback to the record it became, both ways, and mark it kept.")
     p.add_argument("feedback")
-    p.add_argument("target", help="rules/<id>, procedures/<id> or agent")
+    p.add_argument("target", help="rules/<id>, procedures/<id> or agent; in a team brain policies/<id>, routines/<id> or lanes")
     p = command("unlink", cmd_unlink, "Remove a link both ways. Feedback with no link left goes back to new.")
     p.add_argument("feedback")
     p.add_argument("target")
@@ -154,13 +142,28 @@ def build_parser() -> argparse.ArgumentParser:
         hp.set_defaults(handler=handler, command=f"hook {event}")
         hp.add_argument("--host", choices=tuple(hooks.HOSTS), default="claude")
 
+    p = command("team", None, "Join an agent brain to a team brain, or take it out. Run it in the team brain.")
+    tsub = p.add_subparsers(title="team commands", metavar="<action>")
+    tp = tsub.add_parser("add", help="Add an agent brain to the roster, and move its lane and routines into the team brain.", parents=[common])
+    tp.set_defaults(handler=cmd_team_add, command="team add")
+    tp.add_argument("path", type=Path, help="the agent brain's folder, in the team brain's repository")
+    tp = tsub.add_parser("remove", help="Take an agent off the roster: its lane rows go back to its agent.md, and each routine it owns goes where --routine says.", parents=[common])
+    tp.set_defaults(handler=cmd_team_remove, command="team remove")
+    tp.add_argument("agent", help="the agent's name on the roster")
+    tp.add_argument("--routine", action="append", default=[], metavar="ID=CHOICE", help="for each routine the agent owns: <id>=back, <id>=retire or <id>=<another agent>; repeat for more")
+
     command("version", cmd_version, "Print the version.")
     return parser
 
 
 def cmd_init(args) -> Result:
     folder = (args.path or Path.cwd() / args.name).resolve()
-    brain = scaffold.init(folder, args.name, git=not args.no_git, seed=not args.no_seed, display_name=args.display_name, team=args.team)
+    if args.team:
+        if args.no_seed or args.display_name:
+            raise BrainError(Finding("init.team_options", "--team", "A team brain seeds no procedures and has no display name.", "Leave out --no-seed and --display-name."), outcome="error")
+        brain = scaffold.init_team(folder, args.name, git=not args.no_git)
+    else:
+        brain = scaffold.init(folder, args.name, git=not args.no_git, seed=not args.no_seed, display_name=args.display_name)
     lines = [f"  created {folder}", f"  the skill: {brain.skill_dir}"]
     if not args.no_git:
         repo = scaffold.git_root(folder)
@@ -173,14 +176,18 @@ def cmd_init(args) -> Result:
     lines.append(f"  {len(checks.blocking(findings))} TODO: placeholders and other block findings to fill in; run brain check.")
     return Result(
         "init", "ok", f"Brain {args.name} created.", lines=lines, value={"root": str(brain.root), "skill": str(brain.skill_dir)},
-        next=(f"brain check --project {folder}", "fill agent.md and the SKILL.md description until it passes"),
+        next=(f"brain check --project {folder}", "fill the SKILL.md description until it passes, then run brain team add <agent folder>" if args.team else "fill agent.md and the SKILL.md description until it passes"),
     )
 
 
 def cmd_feedback_add(args) -> Result:
     brain = find(args.project)
     require_writable(brain)
-    words = args.text if args.text is not None else sys.stdin.read()
+    words = args.text if args.text is not None else ("" if brain.is_team and sys.stdin.isatty() else sys.stdin.read())
+    if not brain.is_team:
+        missing = [flag for flag, value in (("--name", args.name), ("--from", args.source_role), ("--kind", args.kind)) if not value]
+        if missing:
+            raise BrainError(Finding("feedback.missing", " ".join(missing), f"{', '.join(missing)} is required.", "Pass it."), outcome="error")
     record = scaffold.add_feedback(
         brain, name=args.name, words=words, source_role=args.source_role, kind=args.kind, source=args.source, did=args.did, context=args.context, date=args.date, rid=args.id
     )
@@ -212,8 +219,8 @@ def cmd_feedback_list(args) -> Result:
 def cmd_new(args) -> Result:
     brain = find(args.project)
     require_writable(brain)
-    folder = {"rule": "rules", "procedure": "procedures", "topic": "topics", "routine": "routines"}[args.kind]
-    values = {k: getattr(args, k) for k in ("name", "description", "scope", "trigger", "outputs", "procedure", "receiver")}
+    folder = {"rule": "rules", "procedure": "procedures", "topic": "topics", "routine": "routines", "policy": "policies"}[args.kind]
+    values = {k: getattr(args, k) for k in ("name", "description", "scope", "trigger", "outputs", "procedure", "receiver", "owner")}
     body = None
     if args.body_file:
         body = sys.stdin.read() if str(args.body_file) == "-" else args.body_file.read_text()
@@ -256,6 +263,16 @@ def cmd_index(args) -> Result:
     records = load(brain)
     if not brain.skill_file.is_file() or not index.write(brain, records):
         raise BrainError(Finding("skill.markers_missing", brain.rel(brain.skill_file), "SKILL.md has no index markers.", f"Add the lines {index.START} and {index.END}."))
+    if brain.is_team:
+        if records.lanes is None:
+            team.write_lanes(brain, records, [])
+        repo = team.repo_root(brain)
+        index.write(brain, load(brain), repo)
+        # Each member's SKILL.md copies its lanes from lanes.md, so a team index rewrites theirs too.
+        names = team.reindex_members(brain, repo) if repo else []
+        policies = sum(1 for r in records.by_folder["policies"].values() if r.meta.get("status") == "active")
+        lines = [f"  agent SKILL.md rewritten: {', '.join(names)}"] if names else []
+        return Result("index", "ok", f"SKILL.md index: {len(records.by_folder['agents'])} agents, {policies} policies.", lines=lines, next=("brain check --all", "confirm the team and its agents are whole"))
     rules = sum(1 for r in records.by_folder["rules"].values() if r.meta.get("status") == "active")
     procedures = sum(1 for r in records.by_folder["procedures"].values() if r.meta.get("status") == "active")
     return Result("index", "ok", f"SKILL.md index: {rules} rules, {procedures} procedures.", next=("brain check", "confirm the brain is whole"))
@@ -269,20 +286,20 @@ def cmd_check(args) -> Result:
             raise BrainError(Finding("check.no_git", str(start), "--staged needs a git repository.", "Run it inside the repository, or leave out --staged."), outcome="error")
         with tempfile.TemporaryDirectory() as tmp:
             subprocess.run(["git", "-C", str(repo), "checkout-index", "-a", f"--prefix={tmp}/"], check=True)
-            return check_brains(find_all(Path(tmp)), Path(tmp).resolve(), many=True)
+            return check_brains(find_all(Path(tmp)), Path(tmp).resolve(), many=True, repo=Path(tmp).resolve())
     if args.all:
         root = (args.project or Path.cwd()).resolve()
         return check_brains(find_all(root), root, many=True)
     return check_brains([find(args.project)], None, many=False)
 
 
-def check_brains(brains, root: Path | None, many: bool) -> Result:
+def check_brains(brains, root: Path | None, many: bool, repo: Path | None = None) -> Result:
     if not brains:
         return Result("check", "ok", f"No brains under {root}.", value=[])
     findings: list[Finding] = []
     for brain in brains:
         prefix = f"{brain.root.relative_to(root)}/" if many and brain.root != root else ""
-        findings += [Finding(f.code, prefix + f.file, f.message, f.fix, f.level) for f in checks.run(brain)]
+        findings += [Finding(f.code, prefix + f.file, f.message, f.fix, f.level) for f in checks.run(brain, repo=repo)]
     blocks = sum(1 for f in findings if f.level == BLOCK)
     warns = len(findings) - blocks
     names = ", ".join(b.name for b in brains)
@@ -311,7 +328,7 @@ def cmd_trace(args) -> Result:
                 lines.append(f"    feedback {fid}: (missing)")
                 continue
             lines.append(f"    from feedback {fid}: {fb.meta.get('date')}, {fb.meta.get('from')}: \"{first_line(fb.sections.get('Feedback', ''))}\"")
-        users = [p for p in records.by_folder["procedures"].values() if record.id in checks.as_list(p.meta.get("rules"))]
+        users = [p for p in (records.by_folder.get("procedures") or {}).values() if record.id in checks.as_list(p.meta.get("rules"))]
         for p in users:
             lines.append(f"    used by {p.ref}: {p.meta.get('name')}")
         for t in checks.as_list(record.meta.get("topics")):
@@ -337,7 +354,7 @@ def cmd_status(args) -> Result:
             tally[label] = tally.get(label, 0) + 1
         counts[folder] = tally
     pending = sorted(f.id for f in records.by_folder["feedback"].values() if f.meta.get("disposition") in ("new", "pending"))
-    proposed = sorted(r.ref for r in records.all() if r.kind.folder in ("rules", "procedures") and r.meta.get("status") == "proposed")
+    proposed = sorted(r.ref for r in records.all() if r.kind.folder in ("rules", "procedures", "policies") and r.meta.get("status") == "proposed")
     lines = [f"  folder: {brain.root}", f"  reports: {brain.root / 'reports'}"]
     lines += [f"  {folder}: " + (", ".join(f"{n} {k}" for k, n in sorted(t.items())) or "none") for folder, t in counts.items()]
     lines += [f"  new or pending: feedback/{p}" for p in pending] + [f"  proposed: {p}" for p in proposed]
@@ -368,22 +385,33 @@ def cmd_plugin(args) -> Result:
     return Result("plugin", "ok", f"Plugin {brain.name} written.", lines=lines, next=("brain check", "confirm the plugin matches the brain"))
 
 
-def cmd_import_darkmatter(args) -> Result:
-    renames = {}
-    for pair in args.rename:
-        old, sep, new = pair.partition("=")
-        if not sep or not old or not new:
-            raise BrainError(Finding("import.rename", pair, "A rename is OLD=NEW.", "Pass --rename run-the-dream=run-the-team-dream."), outcome="error")
-        renames[old] = new
-    brain, report = importer.import_darkmatter(args.source, args.into.resolve(), agent_doc=args.agent, owner=args.owner, renames=renames, siblings=args.sibling, name=args.name)
-    findings = checks.run(brain)
-    lines = ["  imported: " + ", ".join(f"{n} {k}" for k, n in report.counts.items())]
-    lines += [f"  dropped: {d}" for d in report.dropped] + [f"  gap: {g}" for g in report.gaps]
-    blocks = len(checks.blocking(findings))
-    value = {"root": str(brain.root), "counts": report.counts, "dropped": report.dropped, "gaps": report.gaps, "block_findings": blocks}
+def cmd_team_add(args) -> Result:
+    crew = find(args.project)
+    require_writable(crew)
+    if not crew.is_team:
+        raise BrainError(Finding("team.not_team", crew.rel(crew.root), f"{crew.name} is an agent brain.", "Run brain team add with --project set to the team brain."), outcome="error")
+    lines = team.add(crew, args.path)
     return Result(
-        "import darkmatter", "ok", f"Imported {brain.name} into {brain.root}: {blocks} block findings to resolve.", lines=lines, value=value,
-        next=(f"brain check --project {brain.root}", "resolve each gap and block finding"),
+        "team add", "ok", f"{args.path} joined team {crew.name}.", lines=lines,
+        next=("git add both brains and commit them in one commit", "the agent brain and the team brain change together"),
+    )
+
+
+def cmd_team_remove(args) -> Result:
+    crew = find(args.project)
+    require_writable(crew)
+    if not crew.is_team:
+        raise BrainError(Finding("team.not_team", crew.rel(crew.root), f"{crew.name} is an agent brain.", "Run brain team remove with --project set to the team brain."), outcome="error")
+    choices = {}
+    for pair in args.routine:
+        rid, sep, choice = pair.partition("=")
+        if not sep or not rid or not choice:
+            raise BrainError(Finding("team.routine_choice", pair, "A routine choice is <id>=back, <id>=retire or <id>=<agent>.", "Pass --routine nightly-dream=back."), outcome="error")
+        choices[rid] = choice
+    lines = team.remove(crew, args.agent, choices)
+    return Result(
+        "team remove", "ok", f"{args.agent} left team {crew.name}.", lines=lines,
+        next=("git add both brains and commit them in one commit", "the agent brain and the team brain change together"),
     )
 
 

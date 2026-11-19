@@ -1,0 +1,463 @@
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from .brain import CONFIG_FILE, Brain, find_all, load_config
+from .output import BrainError, Finding
+from .records import LANES_FILE, Records, load
+
+LANES_HEADER = ("Work", "Owner")
+POINTER = re.compile(r"^brain:([a-z0-9]+(?:-[a-z0-9]+)*)/([a-z0-9]+(?:-[a-z0-9]+)*)$")
+
+
+@dataclass(frozen=True)
+class Lane:
+    work: str
+    owner: str
+    line: int
+
+
+def repo_root(brain: Brain, repo: Path | None = None) -> Path | None:
+    # check --staged copies the index to a folder with no .git, so the caller names the top folder there.
+    if repo is not None:
+        return repo
+    from .plugin import git
+
+    top = git(brain.root, "rev-parse", "--show-toplevel")
+    return Path(top) if top else None
+
+
+def brain_at(repo: Path, source: str) -> Brain | None:
+    folder = (repo / source).resolve()
+    if not folder.is_relative_to(repo.resolve()) or not (folder / CONFIG_FILE).is_file():
+        return None
+    try:
+        return Brain(root=folder, config=load_config(folder / CONFIG_FILE))
+    except BrainError:
+        return None
+
+
+def brains_in(repo: Path) -> list[Brain]:
+    try:
+        return find_all(repo)
+    except BrainError:
+        return []
+
+
+def find_team(repo: Path | None, name: str) -> Brain | None:
+    if repo is None:
+        return None
+    return next((b for b in brains_in(repo) if b.is_team and b.name == name), None)
+
+
+def source_of(brain: Brain, repo: Path) -> str:
+    return str(brain.root.resolve().relative_to(repo.resolve()))
+
+
+def roster(team_records: Records) -> dict[str, str]:
+    return {r.id: str(r.meta.get("source", "")) for r in team_records.by_folder["agents"].values()}
+
+
+def members(team: Brain, repo: Path) -> dict[str, Brain]:
+    found = {}
+    for name, source in roster(load(team)).items():
+        agent = brain_at(repo, source) if source else None
+        if agent is not None and not agent.is_team:
+            found[name] = agent
+    return found
+
+
+def parse_lanes(records: Records, where: str) -> tuple[list[Lane], list[Finding]]:
+    # lanes.md holds one Markdown table, | Work | Owner |, under ## Lanes. Each row is one piece of work.
+    if records.lanes is None:
+        return [], []
+    lanes, problems = [], []
+    lines = records.lanes.path.read_text().splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip() == "## Lanes"), len(lines))
+    rows = []
+    for number, line in enumerate(lines[start + 1 :], start=start + 2):
+        if line.startswith("## "):
+            break
+        if line.strip().startswith("|"):
+            rows.append((number, line))
+    if not rows:
+        return [], problems
+    header = [c.strip() for c in rows[0][1].strip().strip("|").split("|")]
+    if tuple(header) != LANES_HEADER:
+        problems.append(Finding("lanes.bad_table", where, f"The table's header is {' | '.join(header)}, not Work | Owner.", "Write the header as | Work | Owner |."))
+        return [], problems
+    for number, line in rows[1:]:
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if all(re.fullmatch(r":?-+:?", c) for c in cells):
+            continue
+        if len(cells) != 2 or not cells[0] or not cells[1]:
+            problems.append(Finding("lanes.bad_table", f"{where}:{number}", "A row needs the work and one owner.", "Write | <work> | <agent> |."))
+            continue
+        lanes.append(Lane(cells[0], cells[1], number))
+    return lanes, problems
+
+
+def work_key(work: str) -> str:
+    return " ".join(work.lower().split())
+
+
+def render_lanes(lanes: list[Lane]) -> str:
+    rows = [f"| {lane.work} | {lane.owner} |" for lane in lanes]
+    return "\n".join(["| Work | Owner |", "|---|---|", *rows])
+
+
+def write_lanes(team: Brain, records: Records, lanes: list[Lane]) -> None:
+    from .records import LANES, Record, write_record
+
+    path = team.references / LANES_FILE
+    record = records.lanes or Record(LANES, "lanes", path, {"feedback": []}, "")
+    intro = "Each row is one piece of work, with exactly one owner agent."
+    record.body = f"## Lanes\n\n{intro}\n\n{render_lanes(lanes)}\n"
+    write_record(record)
+
+
+def lanes_of(brain: Brain, repo: Path | None) -> list[str]:
+    crew = find_team(repo, brain.team) if brain.team else None
+    if crew is None:
+        return []
+    lanes, _ = parse_lanes(load(crew), "")
+    return [lane.work for lane in lanes if lane.owner == brain.name]
+
+
+def reindex_members(crew: Brain, repo: Path) -> list[str]:
+    from . import index
+
+    done = []
+    for name, agent in sorted(members(crew, repo).items()):
+        if agent.team == crew.name and agent.skill_file.is_file():
+            index.write(agent, load(agent), repo)
+            done.append(name)
+    return done
+
+
+def check_member(brain: Brain, records: Records, repo: Path | None) -> list[Finding]:
+    # An agent brain in a team: the team brain holds its routines and lanes.
+    if not brain.team:
+        return []
+    findings = []
+    for routine in records.by_folder["routines"].values():
+        findings.append(Finding("team.agent_has_routine", brain.rel(routine.path), f"{brain.name} is in team {brain.team}, whose brain holds every routine.", f"Run brain team add {source_or_root(brain, repo)} in the team brain, which moves it."))
+    if records.agent is not None and records.agent.meta.get("lane"):
+        findings.append(Finding("team.agent_has_lane", brain.rel(records.agent.path), f"{brain.name} is in team {brain.team}, whose lanes.md holds every lane.", "Move each lane row into the team's lanes.md, and remove lane from agent.md."))
+    team = find_team(repo, brain.team)
+    if team is None:
+        findings.append(Finding("team.not_found", "brain.yaml", f"team names {brain.team!r}, but no team brain of that name is in this repository.", "Fix team:, or create it with brain init <team> --team."))
+    elif brain.name not in roster(load(team)):
+        findings.append(Finding("team.not_member", "brain.yaml", f"team names {brain.team}, but its roster does not list {brain.name}.", f"Run brain team add {source_or_root(brain, repo)} --project {team.root}."))
+    return findings
+
+
+def source_or_root(brain: Brain, repo: Path | None) -> str:
+    return source_of(brain, repo) if repo else str(brain.root)
+
+
+def team_pointer_problem(brain: Brain, target: str, repo: Path | None) -> str:
+    team = brain if brain.is_team else find_team(repo, brain.team or "")
+    if team is None:
+        return f"kept_in names brain:{target}, but team {brain.team} is not in this repository."
+    if target == team.name or target in roster(load(team)):
+        return ""
+    return f"kept_in names brain:{target}, which is neither team {team.name} nor an agent on its roster."
+
+
+def check_team(brain: Brain, records: Records, today, repo: Path | None) -> list[Finding]:
+    findings: list[Finding] = []
+    if repo is None:
+        return [Finding("team.no_repository", brain.rel(brain.root), "A team brain must be in a git repository, with its agents.", "Run git init in the repository's top folder.")]
+    agents: dict[str, Brain] = {}
+    for entry in records.by_folder["agents"].values():
+        where = brain.rel(entry.path)
+        if entry.meta.get("name") != entry.id:
+            findings.append(Finding("team.entry_name", where, f"name is not {entry.id!r}, the file's name.", f"Set name: {entry.id}."))
+        source = entry.meta.get("source")
+        if not isinstance(source, str) or not source:
+            continue
+        agent = brain_at(repo, source)
+        if agent is None or agent.is_team:
+            findings.append(Finding("team.source_missing", where, f"source {source!r} is not an agent brain in this repository.", "Give the agent brain's folder, from the repository's top folder."))
+            continue
+        if agent.name != entry.id:
+            findings.append(Finding("team.entry_name", where, f"{source} holds {agent.name}, not {entry.id}.", f"Rename the file to {agent.name}.md and set name: {agent.name}."))
+            continue
+        if agent.team != brain.name:
+            findings.append(Finding("team.agent_not_in_team", where, f"{agent.name}'s brain.yaml does not say team: {brain.name}.", f"Run brain team add {source}."))
+        agents[agent.name] = agent
+
+    where = f"{brain.rel(brain.references)}/lanes.md"
+    lanes, problems = parse_lanes(records, where)
+    findings += problems
+    if records.lanes is None:
+        findings.append(Finding("lanes.missing", where, "The team has no lanes.md.", "Run brain index, which writes an empty one, then add a row for each piece of work."))
+    seen: dict[str, Lane] = {}
+    for lane in lanes:
+        if lane.owner not in records.by_folder["agents"]:
+            findings.append(Finding("lanes.unknown_owner", f"{where}:{lane.line}", f"The owner {lane.owner!r} is not on the roster.", "Name an agent from references/agents/, or run brain team add."))
+        key = work_key(lane.work)
+        if key in seen:
+            findings.append(Finding("lanes.duplicate", f"{where}:{lane.line}", f"{lane.work!r} is also on line {seen[key].line}.", "Keep one row, with its one owner."))
+        seen.setdefault(key, lane)
+    owners = {lane.owner for lane in lanes}
+    for name in records.by_folder["agents"]:
+        if name not in owners:
+            findings.append(Finding("lanes.agent_without_lane", where, f"{name} owns no work in lanes.md.", f"Add a row with {name} as its owner, or remove the agent.", "warn"))
+
+    for routine in records.by_folder["routines"].values():
+        if routine.meta.get("status") == "retired":
+            continue
+        findings += check_routine(brain, routine, records, agents, owners)
+
+    findings += check_intake(brain, records, repo)
+    findings += check_open_pointers(brain, records, agents, today)
+    return findings
+
+
+def check_routine(brain: Brain, routine, records: Records, agents: dict[str, Brain], owners: set[str]) -> list[Finding]:
+    findings = []
+    where = brain.rel(routine.path)
+    owner = routine.meta.get("owner")
+    if isinstance(owner, str) and owner and owner not in records.by_folder["agents"]:
+        findings.append(Finding("routine.unknown_owner", where, f"owner {owner!r} is not on the roster.", "Name an agent from references/agents/."))
+    elif isinstance(owner, str) and owner and owner not in owners:
+        findings.append(Finding("routine.owner_no_lane", where, f"owner {owner} owns no work in lanes.md.", f"Add the routine's work to lanes.md with {owner} as its owner, or give the routine to the agent that owns it.", "warn"))
+    pointer = routine.meta.get("procedure")
+    if not isinstance(pointer, str) or not pointer:
+        return findings
+    agent_name, sep, pid = pointer.partition(":")
+    if not sep or not agent_name or not pid:
+        findings.append(Finding("routine.bad_procedure", where, f"procedure {pointer!r} is not <agent>:<procedure-id>.", "Name the agent and its procedure, such as leo:run-the-dream."))
+        return findings
+    if isinstance(owner, str) and owner and owner != agent_name:
+        findings.append(Finding("routine.owner_not_runner", where, f"owner is {owner}, but the procedure is {agent_name}'s.", f"Give the routine to {agent_name}, or point it to a procedure in {owner}'s brain.", "warn"))
+    agent = agents.get(agent_name)
+    if agent is None:
+        findings.append(Finding("link.unresolved", where, f"procedure names agent {agent_name!r}, which is not on the roster.", "Name an agent from references/agents/."))
+    elif pid not in load(agent).by_folder["procedures"]:
+        findings.append(Finding("link.unresolved", where, f"procedure names {pid!r}, which is not in {agent_name}'s brain.", f"Name a file from {agent_name}'s references/procedures/ without .md."))
+    return findings
+
+
+def check_intake(brain: Brain, records: Records, repo: Path) -> list[Finding]:
+    # Every team feedback is an intake: an agent heard it, kept it in its own brain, and pointed it here.
+    findings = []
+    by_name = {b.name: b for b in brains_in(repo) if not b.is_team}
+    for fb in records.by_folder["feedback"].values():
+        where = brain.rel(fb.path)
+        source = str(fb.meta.get("source") or "")
+        match = POINTER.match(source)
+        if not match:
+            findings.append(Finding("intake.bad_source", where, f"source {source!r} is not brain:<agent>/<feedback-id>.", "Name the agent's feedback record that pointed it here."))
+            continue
+        agent = by_name.get(match.group(1))
+        heard = load(agent).by_folder["feedback"].get(match.group(2)) if agent else None
+        if heard is None:
+            findings.append(Finding("intake.unresolved", where, f"source {source} names no feedback record in this repository.", "Name the agent's feedback record that pointed it here."))
+        elif f"brain:{brain.name}" not in [str(v) for v in heard.meta.get("kept_in") or []]:
+            findings.append(Finding("intake.not_pointed", where, f"{source} does not point to brain:{brain.name}.", f"In {match.group(1)}'s brain, run brain feedback set {match.group(2)} elsewhere --to brain:{brain.name} --reason \"<why>\"."))
+    return findings
+
+
+def check_open_pointers(brain: Brain, records: Records, agents: dict[str, Brain], today) -> list[Finding]:
+    from .records import as_date
+
+    taken = {str(fb.meta.get("source")) for fb in records.by_folder["feedback"].values()}
+    findings = []
+    for name, agent in sorted(agents.items()):
+        for fb in load(agent).by_folder["feedback"].values():
+            if fb.meta.get("disposition") != "elsewhere" or f"brain:{brain.name}" not in [str(v) for v in fb.meta.get("kept_in") or []]:
+                continue
+            if f"brain:{name}/{fb.id}" in taken:
+                continue
+            since = elsewhere_since(fb.sections.get("Context", "")) or as_date(fb.meta.get("date"))
+            if since and (today - since).days > brain.config["intake_days"]:
+                findings.append(
+                    Finding(
+                        "team.intake_missing", f"{agent.rel(fb.path)} in {name}", f"It points to the team for {(today - since).days} days, with no intake record.",
+                        f"Run brain feedback add --source brain:{name}/{fb.id} in the team brain, and decide it.", "warn",
+                    )
+                )
+    return findings
+
+
+def elsewhere_since(context: str):
+    from .records import as_date
+
+    dates = re.findall(r"^(\d{4}-\d{2}-\d{2}), elsewhere:", context, re.MULTILINE)
+    return as_date(dates[-1]) if dates else None
+
+
+def require_repo(team: Brain) -> Path:
+    repo = repo_root(team)
+    if repo is None:
+        raise BrainError(Finding("team.no_repository", str(team.root), "A team brain must be in a git repository, with its agents.", "Run git init in the repository's top folder."), outcome="error")
+    return repo
+
+
+def set_config_lines(brain: Brain, changes: dict[str, object]) -> None:
+    # Line edits, not a re-dump, so brain.yaml keeps its comments. A None value removes the key.
+    path = brain.root / CONFIG_FILE
+    lines = path.read_text().splitlines()
+    for key, value in changes.items():
+        index = next((i for i, line in enumerate(lines) if line.startswith(f"{key}:")), None)
+        if value is None:
+            if index is not None:
+                del lines[index]
+        elif index is not None:
+            lines[index] = f"{key}: {value}"
+        elif key == "format":
+            lines.insert(0, f"{key}: {value}")
+        else:
+            lines.insert(next((i + 1 for i, line in enumerate(lines) if line.startswith("name:")), len(lines)), f"{key}: {value}")
+    path.write_text("\n".join(lines) + "\n")
+
+
+def add(team: Brain, path: Path) -> list[str]:
+    from . import index
+    from .brain import FORMAT
+    from .records import AGENT_ENTRY, Record, write_record
+
+    repo = require_repo(team)
+    folder = path.resolve()
+    agent = brain_at(repo, str(folder.relative_to(repo.resolve()))) if folder.is_relative_to(repo.resolve()) else None
+    if agent is None or agent.is_team:
+        raise BrainError(Finding("team.source_missing", str(path), "It is not an agent brain in the team's repository.", "Pass the folder that holds the agent's brain.yaml, in the same repository."), outcome="error")
+    if agent.team and agent.team != team.name:
+        raise BrainError(Finding("team.other_team", str(path), f"{agent.name} is already in team {agent.team}. An agent brain is in one team.", f"Run brain team remove {agent.name} in {agent.team}'s brain first, or copy the brain."))
+    source = source_of(agent, repo)
+    records = load(team)
+    listed = records.by_folder["agents"].get(agent.name)
+    if listed is not None and listed.meta.get("source") != source:
+        raise BrainError(Finding("team.entry_name", str(path), f"The roster already has {agent.name}, from {listed.meta.get('source')}.", "Give one of the two agents another name."))
+
+    agent_records = load(agent)
+    lanes, problems = parse_lanes(records, "lanes.md")
+    if problems:
+        raise BrainError(problems[0])
+    owned = {work_key(lane.work): lane for lane in lanes}
+    new_lanes = []
+    for work in [str(w) for w in (agent_records.agent.meta.get("lane") or [])] if agent_records.agent else []:
+        other = owned.get(work_key(work))
+        if other is not None and other.owner != agent.name:
+            raise BrainError(Finding("lanes.duplicate", str(path), f"{other.owner} already owns {work!r}.", f"Decide which agent owns it, and remove it from the other's lane before you run brain team add."))
+        if other is None:
+            new_lanes.append(Lane(work, agent.name, 0))
+    routines = agent_records.by_folder["routines"]
+    # Every seeded agent brain has the same routine ids, so a taken id gets the agent's name in front.
+    taken = set(records.by_folder["routines"])
+    targets = {}
+    for rid in routines:
+        target = rid if rid not in taken else f"{agent.name}-{rid}"
+        if target in taken:
+            raise BrainError(Finding("team.routine_exists", f"routines/{rid}", f"The team already has a routine {rid} and {target}.", f"Rename {agent.name}'s routine file, then run it again."))
+        taken.add(target)
+        targets[rid] = target
+
+    lines = []
+    entry = Record(AGENT_ENTRY, agent.name, team.references / "agents" / f"{agent.name}.md", {"name": agent.name, "source": source}, "")
+    if listed is None:
+        entry.path.parent.mkdir(parents=True, exist_ok=True)
+        write_record(entry)
+        lines.append(f"  roster: {agent.name} from {source}")
+    if new_lanes or records.lanes is None:
+        write_lanes(team, records, [*lanes, *new_lanes])
+    lines += [f"  lane: {lane.work}" for lane in new_lanes]
+    from .records import TEAM_ROUTINE
+
+    for rid, routine in routines.items():
+        pointer = str(routine.meta.get("procedure") or "")
+        routine.meta["procedure"] = pointer if ":" in pointer or not pointer else f"{agent.name}:{pointer}"
+        target = targets[rid]
+        if target != rid:
+            routine.meta["name"] = f"{routine.meta.get('name', rid)} ({agent.name})"
+        moved = Record(TEAM_ROUTINE, target, team.references / "routines" / f"{target}.md", routine.meta, routine.body)
+        moved.path.parent.mkdir(parents=True, exist_ok=True)
+        write_record(moved)
+        routine.path.unlink()
+        renamed = f" (was {rid})" if target != rid else ""
+        lines.append(f"  routine: {target}{renamed}, procedure {routine.meta['procedure']}")
+    if agent_records.agent is not None and "lane" in agent_records.agent.meta:
+        del agent_records.agent.meta["lane"]
+        write_record(agent_records.agent)
+    set_config_lines(agent, {"format": FORMAT, "team": team.name})
+    index.write(team, load(team), repo)
+    reindex_members(team, repo)
+    return lines
+
+
+def remove(crew: Brain, name: str, choices: dict[str, str]) -> list[str]:
+    from . import index
+    from .records import ROUTINE, Record, write_record
+
+    repo = require_repo(crew)
+    records = load(crew)
+    entry = records.by_folder["agents"].get(name)
+    if entry is None:
+        raise BrainError(Finding("record.not_found", f"agents/{name}", f"{name} is not on the roster.", f"Known: {', '.join(sorted(records.by_folder['agents'])) or 'none'}."), outcome="error")
+    agent = brain_at(repo, str(entry.meta.get("source") or ""))
+    if agent is None or agent.is_team:
+        raise BrainError(Finding("team.source_missing", crew.rel(entry.path), f"{name}'s source is not an agent brain in this repository.", "Fix its source first, so its lanes and routines can go back."))
+    routines = records.by_folder["routines"]
+    owned = {rid: r for rid, r in routines.items() if r.meta.get("owner") == name and r.meta.get("status") != "retired"}
+    others = sorted(rid for rid, r in routines.items() if rid not in owned and r.meta.get("status") != "retired" and str(r.meta.get("procedure") or "").startswith(f"{name}:"))
+    if others:
+        raise BrainError(Finding("team.procedure_in_use", f"routines/{others[0]}", f"Routines of other agents run {name}'s procedures: {', '.join(others)}.", f"Point them to another agent's procedure, or retire them, before you remove {name}."))
+    unknown = sorted(set(choices) - set(owned))
+    if unknown:
+        raise BrainError(Finding("team.routine_choice", f"routines/{unknown[0]}", f"{name} owns no active routine {unknown[0]}.", f"Name only the routines {name} owns: {', '.join(sorted(owned)) or 'none'}."), outcome="error")
+    missing = sorted(set(owned) - set(choices))
+    if missing:
+        raise BrainError(
+            Finding("team.routine_choice", f"routines/{missing[0]}", f"{name} owns routines with no choice: {', '.join(missing)}.", "Pass --routine <id>=back, <id>=retire or <id>=<agent> for each one."), outcome="error"
+        )
+    agent_records = load(agent)
+    moves = []
+    for rid, choice in sorted(choices.items()):
+        routine = owned[rid]
+        _, _, pid = str(routine.meta.get("procedure") or "").partition(":")
+        if choice == "back":
+            if not str(routine.meta.get("procedure") or "").startswith(f"{name}:"):
+                raise BrainError(Finding("team.routine_choice", f"routines/{rid}", f"It runs another agent's procedure, so it cannot go back to {name}.", f"Pass --routine {rid}=retire or {rid}=<agent>."))
+            if rid in agent_records.by_folder["routines"]:
+                raise BrainError(Finding("team.routine_exists", f"routines/{rid}", f"{name}'s brain already has a routine {rid}.", "Rename one of them first."))
+        elif choice != "retire":
+            if choice == name or choice not in records.by_folder["agents"]:
+                raise BrainError(Finding("team.routine_choice", f"routines/{rid}", f"{choice!r} is not another agent on the roster.", "Name back, retire or an agent from references/agents/."), outcome="error")
+            other = brain_at(repo, str(records.by_folder["agents"][choice].meta.get("source") or ""))
+            if other is None or pid not in load(other).by_folder["procedures"]:
+                raise BrainError(Finding("team.routine_choice", f"routines/{rid}", f"{choice}'s brain has no procedure {pid}.", f"Write procedures/{pid} in {choice}'s brain first, or retire the routine."))
+        moves.append((rid, routine, choice, pid))
+
+    lines = []
+    for rid, routine, choice, pid in moves:
+        if choice == "back":
+            routine.meta["procedure"] = pid
+            routine.meta["status"] = "active"
+            write_record(Record(ROUTINE, rid, agent.references / "routines" / f"{rid}.md", routine.meta, routine.body))
+            routine.path.unlink()
+            lines.append(f"  routine {rid}: back to {name}")
+        elif choice == "retire":
+            routine.meta["status"] = "retired"
+            write_record(routine)
+            lines.append(f"  routine {rid}: retired")
+        else:
+            routine.meta.update({"owner": choice, "procedure": f"{choice}:{pid}"})
+            write_record(routine)
+            lines.append(f"  routine {rid}: to {choice}")
+    lanes, _ = parse_lanes(records, "lanes.md")
+    given = [lane.work for lane in lanes if lane.owner == name]
+    write_lanes(crew, records, [lane for lane in lanes if lane.owner != name])
+    if agent_records.agent is not None and given:
+        agent_records.agent.meta["lane"] = [*[str(w) for w in agent_records.agent.meta.get("lane") or []], *given]
+        write_record(agent_records.agent)
+    lines += [f"  lane back to {name}: {work}" for work in given]
+    entry.path.unlink()
+    set_config_lines(agent, {"team": None})
+    agent = brain_at(repo, source_of(agent, repo))
+    index.write(agent, load(agent), repo)
+    index.write(crew, load(crew), repo)
+    reindex_members(crew, repo)
+    return lines

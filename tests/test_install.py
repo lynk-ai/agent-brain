@@ -93,10 +93,14 @@ def test_codex_and_cursor_hooks(brain, tmp_path, host, file, event):
         assert hooks.stop({"stop_hook_active": False}, [brain], host)["decision"] == "block"
 
 
-def test_team_init_seeds_no_routine(repo):
-    brain = scaffold.init(repo / "t", "team-agent", team=True)
-    assert not list((brain.references / "routines").glob("*.md"))
-    assert (brain.references / "procedures" / "run-the-dream.md").exists()
+def test_init_team_makes_a_team_brain(repo, capsys):
+    from agent_brain.cli import main
+
+    assert main(["init", "acme-support", "--team", "--path", str(repo / "t")]) == 0
+    brain = find(repo / "t")
+    assert brain.is_team and brain.config["format"] == 2
+    assert (brain.references / "lanes.md").exists() and not brain.agent_file.exists()
+    assert "brain team add" in capsys.readouterr().out
 
 
 def test_harness_detection_prefers_the_specific_harness():
