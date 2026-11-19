@@ -103,7 +103,11 @@ def start(brains: list[Brain]) -> str:
     for brain in brains:
         records = load(brain)
         pending = [f for f in records.by_folder["feedback"].values() if f.meta.get("disposition") in ("new", "pending")]
-        proposed = [r for r in [*records.by_folder["rules"].values(), *records.by_folder["procedures"].values()] if r.meta.get("status") == "proposed"]
+        folders = ("policies",) if brain.is_team else ("rules", "procedures")
+        proposed = [r for folder in folders for r in records.by_folder[folder].values() if r.meta.get("status") == "proposed"]
+        if brain.is_team:
+            out.append(f"Team brain {brain.name}: {len(pending)} intake feedback new or pending, {len(proposed)} policies proposed.")
+            continue
         out.append(
             f"Brain {brain.name}: {len(pending)} feedback new or pending, {len(proposed)} rules or procedures proposed. "
             f"Take every correction through Take a piece of feedback, in the same turn."

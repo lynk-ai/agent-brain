@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from .brain import Brain
 from .records import Records
 
@@ -7,6 +9,10 @@ AGENT_START = "<!-- brain:agent:start (generated from agent.md by brain index; d
 AGENT_END = "<!-- brain:agent:end -->"
 FIRST_PROCEDURE = "take-feedback"
 VOICE_LINES = 12
+# Past these, the team index lists policies only in references/policies/, so SKILL.md stays loadable.
+TEAM_MAX_AGENTS = 100
+TEAM_MAX_POLICIES = 100
+ROUTINES_LINE = "The team's routines are in [references/routines/](references/routines/): when each runs, who runs it, and which procedure."
 
 
 def items(value) -> list[str]:
@@ -17,15 +23,18 @@ def items(value) -> list[str]:
     return [str(value)] if value not in (None, "") else []
 
 
-def render_agent(records: Records) -> str:
+def render_agent(records: Records, team: str | None = None, lanes: list[str] | None = None) -> str:
     # agent.md loads only when the agent follows a link, so its limits are copied where every load sees them.
     agent = records.agent
     meta = agent.meta if agent else {}
     lines = [AGENT_START, "## Your job", ""]
     if meta.get("job"):
         lines += [str(meta["job"]).strip(), ""]
+    if team:
+        lines += [f"**Team:** {team}. The team's policies are in the {team} skill.", ""]
     for label, key in (("Your lane", "lane"), ("Never", "anti_jobs"), ("Ask first", "needs_approval"), ("Roles you hand off to or consult", "roles")):
-        values = items(meta.get(key))
+        # In a team, the lane rows come from the team's lanes.md, so the hand-off and consult procedures still find them here.
+        values = list(lanes or []) if team and key == "lane" else items(meta.get(key))
         if values:
             lines += [f"**{label}:**", *[f"- {v}" for v in values], ""]
     if meta.get("decider"):
@@ -47,28 +56,34 @@ def current_agent(skill_text: str) -> str | None:
     return skill_text[start : end + len(AGENT_END)]
 
 
-def render(records: Records) -> str:
+def by_topic(records: Records, active: list) -> list[str]:
     topics = records.by_folder["topics"]
-    rules = [r for r in records.by_folder["rules"].values() if r.meta.get("status") == "active"]
-    procedures = [p for p in records.by_folder["procedures"].values() if p.meta.get("status") == "active"]
-
-    # A rule sits under its first topic only, so each row appears once. check blocks a rule with no topic.
+    # A rule or policy sits under its first topic only, so each row appears once. check blocks one with no topic.
     groups: dict[str, list] = {}
-    for rule in rules:
-        labels = rule.meta.get("topics") or [""]
-        groups.setdefault(str(labels[0]), []).append(rule)
+    for record in active:
+        labels = record.meta.get("topics") or [""]
+        groups.setdefault(str(labels[0]), []).append(record)
 
     def topic_title(key: str) -> str:
         return str(topics[key].meta.get("name", key)) if key in topics else key
 
+    lines = []
+    for key in sorted(groups, key=lambda k: topic_title(k).lower()):
+        lines += [f"### {topic_title(key)}", ""]
+        for record in sorted(groups[key], key=lambda r: str(r.meta.get("name", "")).lower()):
+            lines.append(row(record))
+        lines.append("")
+    return lines
+
+
+def render(records: Records) -> str:
+    rules = [r for r in records.by_folder["rules"].values() if r.meta.get("status") == "active"]
+    procedures = [p for p in records.by_folder["procedures"].values() if p.meta.get("status") == "active"]
+
     lines = [START, "## Rules", ""]
     if not rules:
         lines += ["No active rules yet.", ""]
-    for key in sorted(groups, key=lambda k: topic_title(k).lower()):
-        lines += [f"### {topic_title(key)}", ""]
-        for rule in sorted(groups[key], key=lambda r: str(r.meta.get("name", "")).lower()):
-            lines.append(row(rule))
-        lines.append("")
+    lines += by_topic(records, rules)
 
     lines += ["## Procedures", ""]
     if not procedures:
@@ -79,6 +94,37 @@ def render(records: Records) -> str:
     if procedures:
         lines.append("")
     lines.append(END)
+    return "\n".join(lines)
+
+
+def render_team(brain: Brain, records: Records, repo: Path | None) -> str:
+    from . import team
+    from .records import load
+
+    lanes, _ = team.parse_lanes(records, "")
+    entries = sorted(records.by_folder["agents"].values(), key=lambda r: r.id)
+    policies = [p for p in records.by_folder["policies"].values() if p.meta.get("status") == "active"]
+    lines = [START, "## Roster", ""]
+    if not entries:
+        lines += ["No agents yet.", ""]
+    for entry in entries:
+        agent = team.brain_at(repo, str(entry.meta.get("source") or "")) if repo else None
+        agent_md = load(agent).agent if agent and not agent.is_team else None
+        meta = agent_md.meta if agent_md else {}
+        title = meta.get("display_name") or entry.id
+        job = str(meta.get("job") or meta.get("description") or "(no agent brain)").strip()
+        owned = "; ".join(lane.work for lane in lanes if lane.owner == entry.id) or "none"
+        lines.append(f"- **{title}** ({entry.id}). {job} Lanes: {owned}. [agent](references/agents/{entry.id}.md)")
+    if entries:
+        lines.append("")
+    lines += ["## Policies", ""]
+    if not policies:
+        lines += ["No active policies yet.", ""]
+    elif len(entries) > TEAM_MAX_AGENTS or len(policies) > TEAM_MAX_POLICIES:
+        lines += [f"The team has {len(policies)} active policies, too many to list here. Search [references/policies/](references/policies/) by topic.", ""]
+    else:
+        lines += by_topic(records, policies)
+    lines += ["## Routines", "", ROUTINES_LINE, "", END]
     return "\n".join(lines)
 
 
@@ -98,12 +144,21 @@ def current(skill_text: str) -> str | None:
     return skill_text[start : end + len(END)]
 
 
-def write(brain: Brain, records: Records) -> bool:
+def write(brain: Brain, records: Records, repo: Path | None = None) -> bool:
     text = brain.skill_file.read_text()
     old = current(text)
     if old is None:
         return False
-    agent_block = render_agent(records)
+    if brain.is_team:
+        from . import team
+
+        new_text = text.replace(old, render_team(brain, records, team.repo_root(brain, repo)), 1)
+        if new_text != text:
+            brain.skill_file.write_text(new_text)
+        return True
+    from . import team
+
+    agent_block = render_agent(records, brain.team, team.lanes_of(brain, team.repo_root(brain, repo)))
     old_agent = current_agent(text)
     # A brain made before the agent block gets it in place, above the rules index.
     text = text.replace(old_agent, agent_block, 1) if old_agent is not None else text.replace(old, f"{agent_block}\n\n{old}", 1)

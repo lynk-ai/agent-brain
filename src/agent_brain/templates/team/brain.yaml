@@ -1,0 +1,9 @@
+format: 2
+kind: team
+name: {{name}}
+# Days after which pending feedback, a policy's checked date, and an agent's pointer to the team with no intake record show as warnings.
+pending_days: 14
+checked_days: 90
+intake_days: 14
+# Harness details the skill may not name. They belong in harness/<harness>/.
+harness_names: [".claude/", ".codex/", ".cursor/", ".agents/skills", "settings.local.json"]

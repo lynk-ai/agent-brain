@@ -5,7 +5,7 @@ from pathlib import Path
 from . import index
 from .brain import Brain
 from .output import BLOCK, WARN, Finding
-from .records import AGENT, ID_PATTERN, LINKABLE, Kind, Record, Records, as_date, load, split_front_matter
+from .records import AGENT, ID_PATTERN, Kind, Record, Records, as_date, linkable_of, load, split_front_matter
 
 UNFINISHED = "TODO:"
 SKILL_MAX_LINES = 500
@@ -31,30 +31,48 @@ URL_OR_CODE = re.compile(r"`[^`]*`|\b[a-z][a-z0-9+.-]*://\S+|\bgit@[\w.-]+:\S+")
 LINK_PATTERN = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 
 
-def run(brain: Brain, records: Records | None = None, today: dt.date | None = None) -> list[Finding]:
+def run(brain: Brain, records: Records | None = None, today: dt.date | None = None, repo: Path | None = None) -> list[Finding]:
+    from . import team
+
     records = records or load(brain)
     today = today or dt.date.today()
+    repo = team.repo_root(brain, repo)
     findings = list(records.problems)
+    findings += check_format(brain)
     findings += check_shapes(brain, records)
-    findings += check_links(brain, records)
+    findings += check_links(brain, records, repo)
     findings += check_feedback(brain, records, today)
     findings += check_rules(brain, records, today)
-    findings += check_skill(brain, records)
+    findings += check_skill(brain, records, repo)
     findings += check_text(brain)
+    findings += team.check_team(brain, records, today, repo) if brain.is_team else team.check_member(brain, records, repo)
     # YAML reads a bare off as false.
     levels = {code: "off" if level is False else str(level) for code, level in (brain.config.get("levels") or {}).items()}
     return [Finding(f.code, f.file, f.message, f.fix, levels.get(f.code, f.level)) for f in findings if levels.get(f.code) != "off"]
 
 
+def check_format(brain: Brain) -> list[Finding]:
+    from .brain import FORMAT
+
+    if "format" in brain.config:
+        return []
+    # A format 1 brain reads as format 2 unchanged, so the missing line only warns.
+    return [Finding("brain.format_missing", "brain.yaml", "brain.yaml has no format, so it reads as format 1.", f"Add the line format: {FORMAT}.", WARN)]
+
+
 def check_shapes(brain: Brain, records: Records) -> list[Finding]:
     findings: list[Finding] = []
-    if records.agent is None:
+    if not brain.is_team and records.agent is None:
         if not brain.agent_file.exists():
             findings.append(Finding("agent.missing", brain.rel(brain.agent_file), "The brain has no agent record.", "Write agent.md in the skill folder."))
-    else:
+    elif not brain.is_team:
         findings += check_record(brain, records.agent, AGENT)
         if records.agent.meta.get("name") != brain.name:
             findings.append(Finding("agent.name", brain.rel(records.agent.path), f"agent.md's name is not {brain.name!r}.", f"Set name: {brain.name}."))
+        if not brain.team and not records.agent.meta.get("lane"):
+            findings.append(Finding("record.missing_field", brain.rel(records.agent.path), "lane is required.", "List what the agent owns and does itself."))
+    if records.lanes is not None:
+        findings += check_record(brain, records.lanes, records.lanes.kind)
     for record in records.all():
         if not ID_PATTERN.match(record.id):
             findings.append(Finding("record.bad_id", brain.rel(record.path), "A file name is lowercase words joined by single hyphens.", "Rename the file and the links to it."))
@@ -109,42 +127,50 @@ def value_problem(value, spec) -> str:
     return ""
 
 
-def check_links(brain: Brain, records: Records) -> list[Finding]:
+def check_links(brain: Brain, records: Records, repo: Path | None = None) -> list[Finding]:
     findings: list[Finding] = []
     feedback = records.by_folder["feedback"]
     topics = records.by_folder["topics"]
-    rules = records.by_folder["rules"]
-    procedures = records.by_folder["procedures"]
+    linkable = linkable_of(brain)
+    holders = [r for folder in linkable for r in (records.by_folder.get(folder) or {}).values()]
+    if records.lanes is not None:
+        holders.append(records.lanes)
+    names = "policies/<id>, routines/<id> or lanes" if brain.is_team else "rules/<id>, procedures/<id> or agent"
 
     for fb in feedback.values():
         where = brain.rel(fb.path)
         for target_ref in as_list(fb.meta.get("kept_in")):
-            if target_ref == "agent":
+            if target_ref == "agent" and not brain.is_team:
                 continue
             if fb.meta.get("disposition") == "elsewhere":
-                problem = pointer_problem(brain, target_ref)
+                problem = pointer_problem(brain, target_ref, repo)
                 if problem:
                     findings.append(Finding("feedback.elsewhere_pointer", where, problem, POINTER_FIX))
                 continue
             folder = target_ref.partition("/")[0]
             target = records.get(target_ref)
-            if folder not in LINKABLE or target is None:
-                findings.append(Finding("link.unresolved", where, f"kept_in names {target_ref!r}, which does not exist.", "Name rules/<id>, procedures/<id> or agent."))
+            if folder not in linkable or target is None:
+                findings.append(Finding("link.unresolved", where, f"kept_in names {target_ref!r}, which does not exist.", f"Name {names}."))
             elif fb.id not in as_list(target.meta.get("feedback")):
                 findings.append(Finding("link.one_way", where, f"kept_in names {target_ref}, but {target_ref} does not list this feedback.", f"Run brain link {fb.id} {target_ref}."))
 
-    for record in [*rules.values(), *procedures.values()]:
+    for record in holders:
         where = brain.rel(record.path)
         for fid in as_list(record.meta.get("feedback")):
             fb = feedback.get(fid)
             if fb is None:
                 findings.append(Finding("link.unresolved", where, f"feedback names {fid!r}, which does not exist.", "Name a file from references/feedback/ without .md."))
-            elif record.ref not in as_list(fb.meta.get("kept_in")):
-                findings.append(Finding("link.one_way", where, f"It lists feedback {fid}, but that feedback's kept_in does not name {record.ref}.", f"Run brain link {fid} {record.ref}."))
+            elif ref_of(record) not in as_list(fb.meta.get("kept_in")):
+                findings.append(Finding("link.one_way", where, f"It lists feedback {fid}, but that feedback's kept_in does not name {ref_of(record)}.", f"Run brain link {fid} {ref_of(record)}."))
         for tid in as_list(record.meta.get("topics")):
             if tid not in topics:
                 findings.append(Finding("link.unresolved", where, f"topics names {tid!r}, which does not exist.", f"Run brain new topic {tid}, or fix the id."))
 
+    if brain.is_team:
+        # A team routine names <agent>:<procedure>; team.check_team resolves it in the agent's brain.
+        return findings
+    rules = records.by_folder["rules"]
+    procedures = records.by_folder["procedures"]
     for procedure in procedures.values():
         for rid in as_list(procedure.meta.get("rules")):
             if rid not in rules:
@@ -188,9 +214,15 @@ def check_feedback(brain: Brain, records: Records, today: dt.date) -> list[Findi
     return findings
 
 
+def ref_of(record: Record) -> str:
+    from .records import LANES, LANES_REF
+
+    return LANES_REF if record.kind is LANES else record.ref
+
+
 def check_rules(brain: Brain, records: Records, today: dt.date) -> list[Finding]:
     findings: list[Finding] = []
-    for rule in records.by_folder["rules"].values():
+    for rule in records.by_folder["policies" if brain.is_team else "rules"].values():
         if rule.meta.get("status") != "active":
             continue
         checked = as_date(rule.meta.get("checked"))
@@ -201,7 +233,9 @@ def check_rules(brain: Brain, records: Records, today: dt.date) -> list[Finding]
     return findings
 
 
-def check_skill(brain: Brain, records: Records) -> list[Finding]:
+def check_skill(brain: Brain, records: Records, repo: Path | None = None) -> list[Finding]:
+    from . import team
+
     findings: list[Finding] = []
     where = brain.rel(brain.skill_file)
     if not brain.skill_dir.is_dir():
@@ -229,13 +263,20 @@ def check_skill(brain: Brain, records: Records) -> list[Finding]:
     from . import plugin
 
     findings += plugin.drift(brain)
+    if brain.is_team:
+        current = index.current(text)
+        if current is None:
+            findings.append(Finding("skill.markers_missing", where, "SKILL.md has no index markers.", f"Add the lines {index.START} and {index.END}, then run brain index."))
+        elif current != index.render_team(brain, records, repo):
+            findings.append(Finding("skill.index_stale", where, "The index does not match the roster, the lanes and the active policies.", "Run brain index."))
+        return findings
     if "take-feedback" not in records.by_folder["procedures"]:
         findings.append(Finding("procedure.no_take_feedback", where, "The brain has no take-feedback procedure.", "Write procedures/take-feedback.md, so every correction has one path.", WARN))
     current_agent = index.current_agent(text)
     if current_agent is None:
         findings.append(Finding("skill.agent_markers_missing", where, "SKILL.md does not carry the agent's job and limits.", "Run brain index."))
-    elif current_agent != index.render_agent(records):
-        findings.append(Finding("skill.agent_stale", where, "The job and limits in SKILL.md differ from agent.md.", "Run brain index."))
+    elif current_agent != index.render_agent(records, brain.team, team.lanes_of(brain, repo)):
+        findings.append(Finding("skill.agent_stale", where, "The job and limits in SKILL.md differ from agent.md, or the lanes from the team's lanes.md.", "Run brain index."))
     current = index.current(text)
     if current is None:
         findings.append(Finding("skill.markers_missing", where, "SKILL.md has no index markers.", f"Add the lines {index.START} and {index.END}, then run brain index."))
@@ -280,14 +321,18 @@ POINTER_KINDS = ("brain", "plugin", "book", "doc")
 POINTER_FIX = "Run brain feedback set <id> elsewhere --to <kind>:<name> --reason \"<why>\", with kind brain, plugin, book or doc."
 
 
-def pointer_problem(brain: Brain, pointer: str) -> str:
+def pointer_problem(brain: Brain, pointer: str, repo: Path | None = None) -> str:
     # A lesson kept elsewhere names where: a brain or plugin in this repository, a book, or a file (doc) here.
     kind, _, target = pointer.partition(":")
     if kind not in POINTER_KINDS or not target:
         return f"kept_in names {pointer!r}; an elsewhere pointer is <kind>:<name>."
-    from .plugin import git, marketplace_of
+    from . import team
+    from .plugin import marketplace_of
 
-    top = git(brain.root, "rev-parse", "--show-toplevel")
+    top = team.repo_root(brain, repo)
+    if kind == "brain" and (brain.team or brain.is_team):
+        # In a team, a lesson goes to the team brain or to a brain on its roster.
+        return team.team_pointer_problem(brain, target, top)
     if kind == "doc" and top and not (Path(top) / target).exists():
         return f"kept_in names {pointer!r}, but {target} does not exist in this repository."
     if kind == "brain" and top and not ((Path(top) / "brains" / target).is_dir() or (Path(top) / target).is_dir()):

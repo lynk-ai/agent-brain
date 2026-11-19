@@ -1,6 +1,6 @@
 # agent-brain
 
-`brain` keeps an agent's brain whole. The brain is a skill folder in git. Its SKILL.md indexes the active rules and procedures, grouped by topic. Each rule and procedure links the feedback it came from, and that feedback stays in `references/` as evidence. The agent judges what a piece of feedback means. `brain` writes the records, keeps the links two-way, generates the index, and refuses a brain that is not whole.
+`brain` keeps an agent's brain whole, and a team's brain. The brain is a skill folder in git. Its SKILL.md indexes the active rules and procedures, grouped by topic. Each rule and procedure links the feedback it came from, and that feedback stays in `references/` as evidence. The agent judges what a piece of feedback means. `brain` writes the records, keeps the links two-way, generates the index, and refuses a brain that is not whole.
 
 ## Install
 
@@ -24,35 +24,70 @@ brain hooks install --project brains/help-center-writer  # the pre-commit hook, 
 
 ```text
 brains/help-center-writer/
-  brain.yaml                 name, warning periods, harness names the skill may not use
+  brain.yaml                 format, name, team, warning periods, harness names the skill may not use
   help-center-writer/        THE SKILL: what a harness loads (install links to it)
     SKILL.md                 hand-written shell, the agent's job and limits from agent.md, and the rules index (both generated)
-    agent.md                 job, lane, anti-jobs, decider, roles, voice
+    agent.md                 job, lane (only with no team), anti-jobs, decider, roles, voice
     references/
       feedback/  rules/  procedures/  topics/  routines/
   harness/                   harness details, outside the skill
   reports/                   the dream's reports, outside the skill
 ```
 
+## Create a team brain
+
+A team brain holds what a team of agents shares: who is on the team, who owns which work, the policies every agent follows, and the routines the team runs. It lives in the same repository as its agents' brains. Each agent keeps its own brain, and every agent on a team must have one.
+
+```sh
+brain init acme-support --team --path brains/acme-support
+brain team add brains/triage --project brains/acme-support
+brain team add brains/writer --project brains/acme-support
+brain check --all
+```
+
+```text
+brains/acme-support/
+  brain.yaml                 format: 2, kind: team, name, warning periods
+  acme-support/              THE TEAM SKILL
+    SKILL.md                 hand-written shell, and the roster and active policies (generated)
+    references/
+      agents/<agent>.md      name and source: the agent brain's folder, from the repository's top folder
+      lanes.md               one table row per piece of work, with exactly one owner agent
+      policies/  routines/  feedback/  topics/
+  reports/
+```
+
+- `brain team add <path>` lists the agent, moves its `lane` rows from agent.md into lanes.md, moves its routines into the team brain (a taken id gets the agent's name in front), and sets `team: <team>` in its brain.yaml. Commit both brains in one commit.
+- An agent brain with `team:` holds no routine and no `lane`. Its SKILL.md copies its lane rows from the team's lanes.md. `brain index` on the team rewrites each agent's copy.
+- A team routine runs a procedure in an agent's brain: `procedure: <agent>:<procedure-id>`. The team has no procedures of its own.
+- A policy is a rule for the whole team, in `policies/`, with sections Policy, Why and How to apply. Its `feedback` is optional.
+
+### Team feedback
+
+The agent that hears feedback records it in its own brain, in the same turn. If the fix is a lane, a team policy or a routine, or the agent is in doubt, it points the record to the team: `brain feedback set <id> elsewhere --to brain:<team> --reason "<why>"`. If the fix is in another agent's brain, it points there: `--to brain:<agent>`. On a team, `brain:` names only the team or an agent on its roster.
+
+The team's central agent takes each pointer in: `brain feedback add --source brain:<agent>/<id> --project <team brain>` copies the person's words, who said them and the kind from the agent's record. It then decides it like any feedback, and links it to the policy, routine or lanes it changes: `brain link <id> policies/<id>|routines/<id>|lanes`. Whoever can merge the team brain's repository decides. `brain check` on the team warns when a pointer waits more than `intake_days` (14) with no intake.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `brain init <name>` | Creates the brain, its seeded procedures and topic, the dream routine and the pre-commit hook. `--display-name Mila` names the agent. `--no-seed` seeds no procedures. |
-| `brain feedback add` | Writes a feedback record at `disposition: new`. `--id` sets its file name. Refuses a future date, a correction or incident without `--did`, and text that looks like a secret or contact details. |
+| `brain init <name>` | Creates the brain, its seeded procedures and topic, the dream routine and the pre-commit hook. `--display-name Mila` names the agent. `--no-seed` seeds no procedures. `--team` creates a team brain. |
+| `brain feedback add` | Writes a feedback record at `disposition: new`. `--id` sets its file name. Refuses a future date, a correction or incident without `--did`, and text that looks like a secret or contact details. In a team brain, `--source brain:<agent>/<id>` is required, and the agent's record fills what is not given. |
 | `brain feedback set <id> <disposition> --reason` | Closes feedback as pending, one-off, elsewhere or declined, with the reason in Context. Elsewhere also takes `--to <kind>:<name>` (brain, plugin, book or doc), written to `kept_in`. |
 | `brain feedback list [--pending]` | Lists feedback. |
-| `brain new rule\|procedure\|topic\|routine <id>` | Writes a record at `status: proposed`. `--feedback`, `--topic` and `--rule` repeat and must exist. `--body-file <file or ->` gives its sections. |
+| `brain new rule\|procedure\|topic\|routine <id>` | Writes a record at `status: proposed`. `--feedback`, `--topic` and `--rule` repeat and must exist. `--body-file <file or ->` gives its sections. In a team brain: `policy`, `routine` (`--owner`, `--procedure <agent>:<id>`) or `topic`. An agent brain in a team refuses `routine`. |
 | `brain set-status <ref> proposed\|active\|retired` | Sets the status and rewrites the index. Retiring needs `--reason`, which goes into Why. |
-| `brain link <feedback> <rules/id\|procedures/id\|agent>` | Links both ways and marks the feedback kept. |
+| `brain link <feedback> <rules/id\|procedures/id\|agent>` | Links both ways and marks the feedback kept. In a team brain: `policies/<id>`, `routines/<id>` or `lanes`. |
 | `brain unlink <feedback> <record>` | Removes the link both ways. Feedback with no link left goes back to new. |
-| `brain index` | Rewrites SKILL.md's generated blocks: the agent's job, lane, never list, approvals, roles, decider and voice from agent.md, then the index of active rules and procedures. |
+| `brain index` | Rewrites SKILL.md's generated blocks: the agent's job, lane, never list, approvals, roles, decider and voice from agent.md, then the index of active rules and procedures. In a team brain: the roster and the active policies, then each agent's lanes. |
 | `brain check [--all] [--staged]` | Runs every check. `--all` checks every brain under the folder. `--staged` checks what git has staged. |
 | `brain trace <ref>` | Shows a record, the feedback behind it and what uses it. |
 | `brain status` | Counts, new and pending feedback, and proposed records. The dream starts here. |
 | `brain install [--harness claude\|codex\|cursor] [--user]` or `--to <folder>` | Links the skill into the project's skills folder of the harness running the command (Claude Code: `.claude/skills`, Codex and Cursor: `.agents/skills`), or another harness, or the user's folder. `--copy` copies it, for a harness that cannot follow a link. Lists the other harnesses it supports, so the agent asks the person about them. Warns when the checkout is not on the default branch. |
-| `brain plugin` | Writes the brain's `.claude-plugin/plugin.json`, its `source` in brain.yaml, and its line in the repository's `.claude-plugin/marketplace.json`. |
-| `brain import darkmatter <brain> --into <folder>` | Imports a darkmatter agent brain. `--agent` takes the agent's doc, `--rename OLD=NEW` renames a record, `--sibling 'lynk-*-playbook'` rewrites paths into brains that move with it. Reports every dropped field and every gap. |
+| `brain plugin` | Writes the brain's `.claude-plugin/plugin.json`, its `source` in brain.yaml, and its line in the repository's `.claude-plugin/marketplace.json`. A team brain ships the same way. |
+| `brain team add <path>` | In a team brain: lists the agent brain at `<path>` and moves its lanes and routines into the team. |
+| `brain team remove <agent> --routine <id>=back\|retire\|<agent>` | In a team brain: takes the agent off the roster. Its lane rows go back to its agent.md. Each routine it owns needs one `--routine` choice. |
 | `brain hooks install [--harness claude\|codex\|cursor] [--dir <folder>]` | Installs the pre-commit hook, and the Stop hook (and SessionStart for Claude Code and Codex) of the harness running the command, or of each `--harness`. Lists the other harnesses it supports, so the agent asks the person about them. |
 
 Every command takes `--project`, before or after the command (the brain's folder, its installed skill folder, or a folder inside it) and `--json`. The first line of the output is `<outcome>: <headline>`. Each finding is `<file>: <message> Fix: <fix> [<code>]`. The last line is `Next: <command>  (<why>)`. Exit codes: 0 ok, 3 failed or refused, 2 error.
@@ -68,7 +103,9 @@ Every command takes `--project`, before or after the command (the brain's folder
 - A `TODO:` placeholder, a secret, contact details or a card number, a Markdown link that does not resolve, and a harness name from `brain.yaml` anywhere in the skill. URLs and code spans are not scanned for contact details.
 - Feedback dated in the future.
 
-It warns on a brain with no take-feedback procedure, feedback pending past `pending_days`, an active rule not checked against its source within `checked_days`, and a SKILL.md over about 5,000 tokens.
+In a team brain it also blocks: an agent entry whose source is not an agent brain in the repository with `team:` set to this team, a lanes.md owner not on the roster, the same work twice, a routine whose owner is not on the roster or whose procedure does not resolve, and team feedback whose `source` does not resolve to an agent's record that points here. In an agent brain with `team:`, it blocks a routine, a `lane`, a team that is not in the repository or does not list the agent, and a `brain:` pointer outside the team.
+
+It warns on a brain.yaml with no `format` (a format 1 brain: add `format: 2`), a brain with no take-feedback procedure, feedback pending past `pending_days`, an active rule not checked against its source within `checked_days`, and a SKILL.md over about 5,000 tokens. In a team brain it warns on an agent with no lane, a routine whose owner owns no lane or does not run its procedure, and a pointer to the team with no intake after `intake_days`.
 
 A brain can change a check's level in `brain.yaml`:
 

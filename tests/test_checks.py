@@ -161,7 +161,7 @@ def test_future_feedback_dates_block(brain):
 
 def test_repository_pins_and_code_are_not_contact_details(brain):
     procedure = brain.references / "procedures" / "hand-off.md"
-    procedure.write_text(procedure.read_text() + "\nPin `darkmatter.git@v0.7.4` from git+ssh://git@github.com/lynk-ai/darkmatter.git and git@github.com:lynk-ai/x.git.\n")
+    procedure.write_text(procedure.read_text() + "\nPin `toolkit.git@v0.7.4` from git+ssh://git@github.com/acme/toolkit.git and git@github.com:lynk-ai/x.git.\n")
     assert codes(brain) == []
     assert checks.scan_sensitive("install git+ssh://git@github.com/org/repo.git@v1.2.3") == []
     assert checks.scan_sensitive("write to bob@example.com") == ["an email address"]
