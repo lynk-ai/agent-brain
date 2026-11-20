@@ -128,11 +128,13 @@ def books_by_source(books: tuple[str, ...]) -> dict[str, list[str]]:
     return grouped
 
 
+def outside(folders: list[Path], here: Path) -> list[Path]:
+    top = (git_root(here) or here).resolve()
+    return [f for f in folders if not f.is_relative_to(top)]
+
+
 def instruction(display_name: str, skill_files: list[Path], books: tuple[str, ...]) -> str:
     # One fixed template. The agent's own SKILL.md holds who it is; this only says which files to read.
     lines = [f"You are {display_name}. Before your first answer, read these skills in this order and follow them:", *(str(p) for p in skill_files)]
-    grouped = books_by_source(books)
-    if grouped.get("bambooks"):
-        lines.append(f"Your books are in the Bambooks library: {', '.join(grouped.pop('bambooks'))}.")
-    lines += [f"Your books from {source}: {', '.join(ids)}." for source, ids in grouped.items()]
+    lines += [f"Your books from {source}: {', '.join(ids)}." for source, ids in books_by_source(books).items()]
     return "\n".join(lines)

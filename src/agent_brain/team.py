@@ -2,6 +2,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 from .brain import CONFIG_FILE, Brain, find_all, load_config
 from .output import BrainError, Finding
 from .records import LANES_FILE, Records, load
@@ -501,11 +503,47 @@ def names_in(value) -> list:
     return [v for v in value if v] if isinstance(value, list) else []
 
 
+PATH_PREFIXES = ("./", "../", "/", "~")
+
+
+@dataclass(frozen=True)
+class Skill:
+    name: str
+    folder: Path
+    # A brain ships as a plugin from its root; a plain skill folder has none.
+    plugin: Path | None = None
+
+    @property
+    def skill_file(self) -> Path:
+        return self.folder / "SKILL.md"
+
+
 @dataclass
 class LoadCheck:
     findings: list[Finding]
-    resolved: dict[str, Brain]
+    resolved: list[Skill]
     unchecked: list[str]
+
+
+def is_path(entry: str) -> bool:
+    return entry.startswith(PATH_PREFIXES)
+
+
+def skill_folder(entry: str, repo: Path) -> Path:
+    # A relative path is read from the repository's top folder, wherever brain runs.
+    folder = Path(entry).expanduser()
+    return (folder if folder.is_absolute() else repo / folder).resolve()
+
+
+def skill_name(skill_file: Path) -> str | None:
+    from .records import split_front_matter
+
+    try:
+        meta, _ = split_front_matter(skill_file.read_text())
+    except (OSError, ValueError, yaml.YAMLError):
+        return None
+    name = (meta or {}).get("name")
+    return name if isinstance(name, str) else None
 
 
 def team_settings(team: Brain) -> tuple[set[str], dict[str, str], list[Finding]]:
@@ -516,7 +554,7 @@ def team_settings(team: Brain) -> tuple[set[str], dict[str, str], list[Finding]]
         gaps = []
     books = team.config.get("books") or {}
     if not isinstance(books, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in books.items()):
-        problems.append(Finding("brain.config", f"{team.name}/brain.yaml", "books must map each book source to its list file.", "Write books: {bambooks: tools/bambooks-books.txt}."))
+        problems.append(Finding("brain.config", f"{team.name}/brain.yaml", "books must map each book source to its list file.", "Write books: {<source>: <list file from the repository's top folder>}."))
         books = {}
     return set(gaps), books, problems
 
@@ -537,18 +575,29 @@ def check_loads(team: Brain, agent: Brain, meta: dict, repo: Path, provided: dic
     findings: list[Finding] = []
     where = str(agent.agent_file.resolve().relative_to(repo.resolve()))
     loads = loads_of(agent, meta)
-    resolved, unchecked = {}, []
+    resolved: list[Skill] = []
+    unchecked: list[str] = []
     for name in loads.brains:
-        if name in provided:
-            resolved[name] = provided[name]
+        if is_path(name):
+            folder = skill_folder(name, repo)
+            if not (folder / "SKILL.md").is_file():
+                findings.append(Finding("load.bad_path", where, f"{agent.name} loads the path {name}, which is not a folder with a SKILL.md.", "Fix the path in agent.md. A relative path starts from the repository's top folder."))
+                continue
+            declared = skill_name(folder / "SKILL.md")
+            if declared != folder.name:
+                findings.append(Finding("load.skill_name", where, f"{name}'s SKILL.md names {declared!r}, not {folder.name!r}, its folder.", "Load the folder whose name is the skill's name, or fix the SKILL.md name.", "warn"))
+            resolved.append(Skill(folder.name, folder))
+        elif name in provided:
+            brain = provided[name]
+            resolved.append(Skill(name, brain.skill_dir.resolve(), brain.root.resolve()))
         elif name in gaps:
             findings.append(Finding("load.known_gap", where, f"{agent.name} loads {name}, a known gap in {team.name}'s brain.yaml: no brain provides it yet.", f"Add its brain when it exists, then remove it from known_gaps.", "warn"))
         else:
-            findings.append(Finding("load.not_provided", where, f"{agent.name} loads {name}, which no brain in this repository provides.", f"Fix the name in agent.md, add the brain, or list it under known_gaps in {team.name}'s brain.yaml."))
+            findings.append(Finding("load.not_provided", where, f"{agent.name} loads {name}, which no brain in this repository provides.", f"Fix the name in agent.md, load the skill by its path, add the brain, or list it under known_gaps in {team.name}'s brain.yaml."))
     for entry in loads.books:
         source, _, bid = entry.rpartition(":")
         if not source or not bid:
-            findings.append(Finding("load.bad_book", where, f"The book {entry!r} is not written <source>:<book id>.", "Write it as bambooks:<book id>."))
+            findings.append(Finding("load.bad_book", where, f"The book {entry!r} is not written <source>:<book id>.", "Write it as <source>:<book id>."))
             continue
         if source not in sources:
             unchecked.append(source)

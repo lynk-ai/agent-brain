@@ -507,9 +507,10 @@ def cmd_load(args) -> Result:
     lines += [f"  books from {source} are not checked: {crew.name}'s brain.yaml names no list for them" for source in checked.unchecked]
     chosen = args.harness or member.meta.get("harness") or loading.DEFAULT_HARNESS
     loads = team.loads_of(member.brain, member.meta)
-    brains = list(checked.resolved.values())
-    text = loading.instruction(member.display_name, [b.skill_file for b in brains], loads.books)
-    built = adapters.command(chosen, [b.root for b in brains], text, args.harness_args)
+    skills = checked.resolved
+    text = loading.instruction(member.display_name, [s.skill_file for s in skills], loads.books)
+    plain = [s.folder for s in skills if s.plugin is None]
+    built = adapters.command(chosen, [s.plugin for s in skills if s.plugin], text, args.harness_args, loading.outside(plain, Path.cwd()))
     lines += [f"  harness: {harness.NAMES.get(chosen, chosen)}", "  command:", f"  {shlex.join(built)}"]
     value = {"agent": member.row(), "team": crew.name, "harness": chosen, "instruction": text, "command": built}
     if args.dry_run:

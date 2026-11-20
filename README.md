@@ -78,8 +78,17 @@ brain load writer -- --model opus      # what follows -- goes to the harness as 
 1. Finds the agent on the roster by its display name, then its brain name, then a word of its job, without case. Two or more matches list the agents and exit 2. No match prints the roster and exits 2.
 2. Fetches the team's repository. A checkout behind its upstream says by how many commits and asks before it goes on. With no network it warns and goes on. `--no-fetch` skips this.
 3. Reads the agent's `agent.md`: `display_name`, `loads` (`brain`, `skills`, `books`) and `harness` (`claude`, `codex` or `cursor`; default `claude`).
-4. Resolves its own brain and each skill to a brain in the repository with that name, and runs the load checks, each as a warning.
-5. Starts the harness with one fixed instruction: "You are <display name>. Before your first answer, read these skills in this order and follow them:", the full path of each SKILL.md (its own brain first), then its book ids. Claude Code gets `claude --plugin-dir <brain folder>` for each brain and `--append-system-prompt "<instruction>"`. Codex gets `codex -c developer_instructions="<instruction>"`, since it has no plugin flag for one session. Cursor has no adapter yet. `--dry-run` prints the command and starts nothing.
+4. Resolves each load, its own brain first, and runs the load checks, each as a warning. A bare name is a brain with that name in the repository. An entry that starts with `./`, `../`, `/` or `~` is a path to a skill folder holding a SKILL.md, whose front matter `name` should match the folder. A relative path is read from the repository's top folder, not from where `brain` runs. The agent's `agent.md` alone says what it loads and from where; the CLI knows no skill or book source by name.
+5. Starts the harness with one fixed instruction: "You are <display name>. Before your first answer, read these skills in this order and follow them:", the full path of each SKILL.md in load order, then one line per book source: "Your books from <source>: <ids>." Claude Code gets `claude --plugin-dir <brain folder>` for each brain, `--add-dir <folder>` for each plain skill folder outside the repository you run it in, and `--append-system-prompt "<instruction>"`. A plain skill folder gets no `--plugin-dir`. Codex gets `codex -c developer_instructions="<instruction>"`, since it has no plugin flag for one session; the SKILL.md paths do the loading. Cursor has no adapter yet. `--dry-run` prints the command and starts nothing.
+
+```yaml
+# agent.md
+loads:
+  brain: triage
+  skills: [acme-support, ./skills/style-guide, ~/.agents/skills/pdf]
+  books: ['bambooks:write-a-reply', 'acme/handbook:escalations']
+harness: claude
+```
 
 A team brain's `brain.yaml` takes two optional keys for the load checks:
 
@@ -89,7 +98,7 @@ books:                                     # each book source's list of ids, fro
   bambooks: tools/bambooks-books.txt
 ```
 
-An agent loads a book as `<source>:<id>`, such as `bambooks:find-a-document-or-fact`. A source with no list is not checked, and `brain check` says so once.
+An agent loads a book as `<source>:<id>`, from any source. A source with no list is not checked, and `brain check` says so once as a warning, never as a block.
 
 ### Team feedback
 
@@ -136,7 +145,7 @@ Every command takes `--project`, before or after the command (the brain's folder
 - A `TODO:` placeholder, a secret, contact details or a card number, a Markdown link that does not resolve, and a harness name from `brain.yaml` anywhere in the skill. URLs and code spans are not scanned for contact details.
 - Feedback dated in the future.
 
-In a team brain it also blocks: an agent entry whose source is not an agent brain in the repository with `team:` set to this team, a lanes.md owner not on the roster, the same work twice, a routine whose owner is not on the roster or whose procedure does not resolve, and team feedback whose `intake_of` does not resolve to an agent's record that points here. It also runs the load checks on each agent's `loads`: it blocks a brain or skill that no brain in the repository provides, unless the team's `known_gaps` lists it (then it warns), and a book not written `<source>:<id>`, and it warns on a book that is not in its source's list. In an agent brain with `team:`, it blocks a routine, a `lane`, a team that is not in the repository or does not list the agent, and a `brain:` pointer outside the team.
+In a team brain it also blocks: an agent entry whose source is not an agent brain in the repository with `team:` set to this team, a lanes.md owner not on the roster, the same work twice, a routine whose owner is not on the roster or whose procedure does not resolve, and team feedback whose `intake_of` does not resolve to an agent's record that points here. It also runs the load checks on each agent's `loads`: it blocks a name that no brain in the repository provides, unless the team's `known_gaps` lists it (then it warns), a path that is not a folder with a SKILL.md, and a book not written `<source>:<id>`. It warns on a skill folder whose SKILL.md names another skill, and a book that is not in its source's list. In an agent brain with `team:`, it blocks a routine, a `lane`, a team that is not in the repository or does not list the agent, and a `brain:` pointer outside the team.
 
 It warns on a brain.yaml with no `format` (a format 1 brain: add `format: 2`), a brain with no take-feedback procedure, feedback pending past `pending_days`, an active rule not checked against its source within `checked_days`, and a SKILL.md over about 5,000 tokens. In a team brain it warns on an agent with no lane, a routine whose owner owns no lane or does not run its procedure, and a pointer to the team with no intake after `intake_days`.
 
@@ -159,7 +168,7 @@ Each finding names its code in brackets. The codes are stable: `levels:` in brai
 - **Skill and text:** `skill.agent_markers_missing`, `skill.agent_stale`, `skill.description`, `skill.front_matter`, `skill.index_stale`, `skill.lists_feedback`, `skill.markers_missing`, `skill.missing`, `skill.name`, `skill.size`, `skill.too_long`, `core.harness_name`, `data.personal`, `data.secret`, `data.sensitive`.
 - **Team:** `team.agent_has_lane`, `team.agent_has_routine`, `team.agent_not_in_team`, `team.entry_name`, `team.no_repository`, `team.not_found`, `team.not_member`, `team.not_team`, `team.other_team`, `team.procedure_in_use`, `team.routine_choice`, `team.routine_exists`, `team.source_missing`.
 - **Lanes:** `lanes.agent_without_lane`, `lanes.bad_table`, `lanes.bad_work`, `lanes.duplicate`, `lanes.missing`, `lanes.unknown_owner`.
-- **Load:** `load.ambiguous`, `load.bad_book`, `load.behind`, `load.book_list_missing`, `load.book_unlisted`, `load.known_gap`, `load.no_adapter`, `load.no_book_list`, `load.no_harness`, `load.not_fetched`, `load.not_on_team`, `load.not_provided`, `settings.unreadable`, `team.many`, `team.not_saved`.
+- **Load:** `load.ambiguous`, `load.bad_book`, `load.bad_path`, `load.behind`, `load.book_list_missing`, `load.book_unlisted`, `load.known_gap`, `load.no_adapter`, `load.no_book_list`, `load.no_harness`, `load.not_fetched`, `load.not_on_team`, `load.not_provided`, `load.skill_name`, `settings.unreadable`, `team.many`, `team.not_saved`.
 - **Team routines:** `routine.bad_procedure`, `routine.owner_no_lane`, `routine.owner_not_runner`, `routine.unknown_owner`, `routine.unresolved_procedure`.
 - **Intake:** `intake.bad_pointer`, `intake.missing`, `intake.not_pointed`, `intake.unresolved`.
 - **Setup:** `init.bad_name`, `init.not_empty`, `init.team_options`, `install.exists`, `install.where`, `hooks.no_git`, `hooks.nothing`, `hooks.pre_commit_exists`, `plugin.drift`.
