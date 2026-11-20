@@ -6,6 +6,9 @@
 - `src/agent_brain/brain.py`: brain.yaml: `format` (this CLI writes 2, reads 1 as 2, refuses newer), `kind` (agent or team), `team`.
 - `src/agent_brain/records.py`: the record types as hard-coded field specs: an agent brain's (`KINDS`) and a team brain's (`TEAM_KINDS`, plus lanes.md). There is no schema language.
 - `src/agent_brain/team.py`: everything that crosses brains: the team checks, the lanes table, `team add` and `team remove`.
+- `src/agent_brain/load.py`: `brain team` and `brain load`: finding the team brain, matching an agent, the freshness check and the one fixed session instruction. The load checks are in `team.py` (`check_loads`), shared with `brain check`.
+- `src/agent_brain/adapters.py`: the harness adapters `brain load` starts: the exact command for Claude Code and Codex.
+- `src/agent_brain/settings.py`: the one user setting, the team's path (`brain team use`). `BRAIN_CONFIG` names another file, for tests.
 - `src/agent_brain/checks.py`: every check. Each returns findings, and none writes a file.
 - `src/agent_brain/index.py`: the generated SKILL.md index between the markers.
 - `src/agent_brain/scaffold.py`: everything that writes: init, feedback, new records, link, unlink, install.
