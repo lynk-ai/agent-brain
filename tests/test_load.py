@@ -287,3 +287,13 @@ def test_a_checkout_behind_its_upstream_asks_before_it_starts(behind, capsys, mo
     run(capsys, "load", "tara", "--project", project)
     assert started and started[0][0] == "claude"
     assert started[0][2] == str((behind / "brains" / "triage").resolve())
+
+
+def test_grokbot_is_a_valid_agent_md_harness_with_no_load_adapter(crew, repo, capsys):
+    set_agent(repo, "writer", harness="grokbot")
+    writer = find(repo / "brains" / "writer")
+    assert checks.blocking(checks.run(writer)) == []
+    code, out = dry(capsys, crew, "wes")
+    assert code == 2 and "[load.no_adapter]" in out and "Fix: Pass --harness claude or --harness codex." in out
+    code, out = dry(capsys, crew, "wes", "--harness", "codex", "--json")
+    assert code == 0 and json.loads(out)["value"]["command"][0] == "codex"

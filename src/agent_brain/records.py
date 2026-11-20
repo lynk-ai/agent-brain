@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 from .brain import Brain
-from .harness import NAMES as HARNESSES
+from .harness import KNOWN as HARNESSES
 from .output import Finding
 
 ID_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
