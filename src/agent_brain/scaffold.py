@@ -204,7 +204,7 @@ def link(brain: Brain, feedback_id: str, target_ref: str) -> tuple[Record, Recor
     fb = require(records, f"feedback/{feedback_id}")
     target = None
     if target_ref != "agent" or brain.is_team:
-        target = require(records, target_ref, linkable=linkable_of(brain))
+        target = require(records, target_ref, linkable=linkable_of(brain), agent=not brain.is_team)
         ids = as_list(target.meta.get("feedback"))
         if feedback_id not in ids:
             target.meta["feedback"] = [*ids, feedback_id]
@@ -221,7 +221,7 @@ def unlink(brain: Brain, feedback_id: str, target_ref: str) -> Record:
     records = load(brain)
     fb = require(records, f"feedback/{feedback_id}")
     if target_ref != "agent" or brain.is_team:
-        target = require(records, target_ref, linkable=linkable_of(brain))
+        target = require(records, target_ref, linkable=linkable_of(brain), agent=not brain.is_team)
         target.meta["feedback"] = [f for f in as_list(target.meta.get("feedback")) if f != feedback_id]
         write_record(target)
     fb.meta["kept_in"] = [r for r in as_list(fb.meta.get("kept_in")) if r != target_ref]
@@ -231,11 +231,16 @@ def unlink(brain: Brain, feedback_id: str, target_ref: str) -> Record:
     return fb
 
 
-def require(records: Records, ref: str, linkable: tuple[str, ...] = ()) -> Record:
+def target_names(targets: tuple[str, ...], agent: bool = False) -> str:
+    names = ["lanes" if t == LANES_REF else f"{t}/<id>" for t in targets] + (["agent"] if agent else [])
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
+
+
+def require(records: Records, ref: str, linkable: tuple[str, ...] = (), action: str = "Feedback links only to", agent: bool = False) -> Record:
     folder = ref.partition("/")[0]
     if linkable and folder not in linkable:
-        names = "policies/<id>, routines/<id> or lanes" if LANES_REF in linkable else "rules/<id>, procedures/<id> or agent"
-        raise BrainError(Finding("link.target", ref, f"Feedback links only to {names}.", f"Name the record as {names}."), outcome="error")
+        names = target_names(linkable, agent)
+        raise BrainError(Finding("link.target", ref, f"{action} {names}.", f"Name the record as {names}."), outcome="error")
     record = records.get(ref)
     if record is None and ref == LANES_REF:
         raise BrainError(Finding("record.not_found", ref, "The team has no lanes.md.", "Run brain index, which writes it."), outcome="error")
@@ -292,7 +297,12 @@ def new_record(
 
 
 def set_status(brain: Brain, ref: str, status: str, reason: str) -> Record:
-    record = require(load(brain), ref, linkable=("policies",) if brain.is_team else ("rules", "procedures"))
+    folders = ("policies", "routines") if brain.is_team else ("rules", "procedures", "routines")
+    record = require(load(brain), ref, linkable=folders, action="set-status takes only")
+    # Each kind has its own statuses: a routine is active, paused or retired, and has no proposed.
+    allowed = record.kind.fields["status"].choices
+    if status not in allowed:
+        raise BrainError(Finding("status.value", ref, f"A {record.kind.name} has no status {status}.", f"Use one of: {', '.join(allowed)}."), outcome="error")
     if status == "retired" and not reason.strip():
         raise BrainError(Finding("status.no_reason", ref, "Retiring needs a reason.", "Pass --reason \"<what went wrong, and when>\"."), outcome="error")
     refuse_sensitive("--reason", reason)
