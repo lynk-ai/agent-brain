@@ -71,7 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     fp.add_argument("--name", default="", help="the feedback in one sentence; in a team brain, default the agent's record's")
     fp.add_argument("--from", dest="source_role", default="", help="the person who gave it, by name or role; in a team brain, default the agent's record's")
     fp.add_argument("--kind", default="", choices=("", *KINDS["feedback"].fields["kind"].choices), help="in a team brain, default the agent's record's")
-    fp.add_argument("--source", required=True, help="where it was said; in a team brain, brain:<agent>/<feedback-id>, the record that points here")
+    fp.add_argument("--source", default="", help="where it was said; in a team brain, default the agent's record's")
+    fp.add_argument("--intake-of", default="", metavar="brain:<agent>/<feedback-id>", help="in a team brain, required: the agent's feedback record that points to the team")
     fp.add_argument("--did", default="", help="what the agent had done; required for a correction or an incident")
     fp.add_argument("--text", help="the words as said; read from stdin when omitted")
     fp.add_argument("--context", default="", help="the draft, the ticket, or other context")
@@ -175,7 +176,7 @@ def cmd_init(args) -> Result:
     findings = checks.run(brain)
     lines.append(f"  {len(checks.blocking(findings))} TODO: placeholders and other block findings to fill in; run brain check.")
     return Result(
-        "init", "ok", f"Brain {args.name} created.", lines=lines, value={"root": str(brain.root), "skill": str(brain.skill_dir)},
+        "init", "ok", f"Team brain {args.name} created." if args.team else f"Brain {args.name} created.", lines=lines, value={"root": str(brain.root), "skill": str(brain.skill_dir)},
         next=(f"brain check --project {folder}", "fill the SKILL.md description until it passes, then run brain team add <agent folder>" if args.team else "fill agent.md and the SKILL.md description until it passes"),
     )
 
@@ -185,15 +186,19 @@ def cmd_feedback_add(args) -> Result:
     require_writable(brain)
     words = args.text if args.text is not None else ("" if brain.is_team and sys.stdin.isatty() else sys.stdin.read())
     if not brain.is_team:
-        missing = [flag for flag, value in (("--name", args.name), ("--from", args.source_role), ("--kind", args.kind)) if not value]
+        if args.intake_of:
+            raise BrainError(Finding("feedback.intake_in_agent", "--intake-of", "--intake-of is only for a team brain.", "Leave out --intake-of."), outcome="error")
+        missing = [flag for flag, value in (("--name", args.name), ("--from", args.source_role), ("--kind", args.kind), ("--source", args.source)) if not value]
         if missing:
             raise BrainError(Finding("feedback.missing", " ".join(missing), f"{', '.join(missing)} is required.", "Pass it."), outcome="error")
+    record_kind, folder = ("policy", "policies") if brain.is_team else ("rule", "rules")
+    why = "decide it, and link it to the policy, routine or lanes it changes" if brain.is_team else "decide it, as Take a piece of feedback says"
     record = scaffold.add_feedback(
-        brain, name=args.name, words=words, source_role=args.source_role, kind=args.kind, source=args.source, did=args.did, context=args.context, date=args.date, rid=args.id
+        brain, name=args.name, words=words, source_role=args.source_role, kind=args.kind, source=args.source, did=args.did, context=args.context, date=args.date, rid=args.id, intake_of=args.intake_of,
     )
     return Result(
         "feedback add", "ok", f"Feedback {record.id} written. Decide it in this turn.", value={"id": record.id, "path": brain.rel(record.path)},
-        next=(f"brain link {record.id} rules/<id>  or  brain new rule <id> --feedback {record.id}  or  brain feedback set {record.id} <disposition> --reason", "decide it, as Take a piece of feedback says"),
+        next=(f"brain link {record.id} {folder}/<id>  or  brain new {record_kind} <id> --feedback {record.id}  or  brain feedback set {record.id} <disposition> --reason", why),
     )
 
 
@@ -273,9 +278,17 @@ def cmd_index(args) -> Result:
         policies = sum(1 for r in records.by_folder["policies"].values() if r.meta.get("status") == "active")
         lines = [f"  agent SKILL.md rewritten: {', '.join(names)}"] if names else []
         return Result("index", "ok", f"SKILL.md index: {len(records.by_folder['agents'])} agents, {policies} policies.", lines=lines, next=("brain check --all", "confirm the team and its agents are whole"))
+    lines = []
+    if brain.team:
+        # The team's roster copies this agent's job, so the team index changes with agent.md.
+        repo = team.repo_root(brain)
+        crew = team.find_team(repo, brain.team)
+        if crew is not None and crew.skill_file.is_file():
+            index.write(crew, load(crew), repo)
+            lines.append(f"  team SKILL.md rewritten: {crew.name}")
     rules = sum(1 for r in records.by_folder["rules"].values() if r.meta.get("status") == "active")
     procedures = sum(1 for r in records.by_folder["procedures"].values() if r.meta.get("status") == "active")
-    return Result("index", "ok", f"SKILL.md index: {rules} rules, {procedures} procedures.", next=("brain check", "confirm the brain is whole"))
+    return Result("index", "ok", f"SKILL.md index: {rules} rules, {procedures} procedures.", lines=lines, next=("brain check", "confirm the brain is whole"))
 
 
 def cmd_check(args) -> Result:

@@ -97,10 +97,11 @@ def test_init_team_makes_a_team_brain(repo, capsys):
     from agent_brain.cli import main
 
     assert main(["init", "acme-support", "--team", "--path", str(repo / "t")]) == 0
+    assert capsys.readouterr().out.startswith("ok: Team brain acme-support created.")
     brain = find(repo / "t")
     assert brain.is_team and brain.config["format"] == 2
     assert (brain.references / "lanes.md").exists() and not brain.agent_file.exists()
-    assert "brain team add" in capsys.readouterr().out
+    assert (brain.references / "topics" / "how-the-team-works.md").exists()
 
 
 def test_harness_detection_prefers_the_specific_harness():

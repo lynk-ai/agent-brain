@@ -7,7 +7,7 @@ from . import index
 from .brain import CONFIG_FILE, Brain, load_config
 from .checks import as_list, scan_sensitive
 from .output import BrainError, Finding
-from .records import FEEDBACK, ID_PATTERN, as_date, LANES_REF, Record, Records, kinds_of, linkable_of, load, slug, write_record
+from .records import FEEDBACK, ID_PATTERN, TEAM_FEEDBACK, as_date, LANES_REF, Record, Records, kinds_of, linkable_of, load, slug, write_record
 
 TEMPLATES = resources.files("agent_brain") / "templates"
 TODO = "TODO:"
@@ -90,10 +90,13 @@ def refuse_sensitive(field: str, text: str) -> None:
 
 
 def add_feedback(
-    brain: Brain, *, name: str, words: str, source_role: str, kind: str, source: str, did: str = "", context: str = "", date: dt.date | None = None, rid: str = ""
+    brain: Brain, *, name: str, words: str, source_role: str, kind: str, source: str, did: str = "", context: str = "", date: dt.date | None = None, rid: str = "",
+    intake_of: str = "",
 ) -> Record:
     if brain.is_team:
-        heard = intake_source(brain, source)
+        heard = intake_record(brain, intake_of)
+        intake_of = intake_of.strip()
+        source = source or str(heard.meta.get("source") or "")
         # The intake keeps the person's words as the agent recorded them, so the agent's record fills what is not given.
         words = words if words.strip() else heard.sections.get("Feedback", "")
         name = name or str(heard.meta.get("name") or "")
@@ -129,21 +132,24 @@ def add_feedback(
     meta = {"name": name.strip(), "date": date, "from": source_role.strip(), "kind": kind, "source": source.strip()}
     if did.strip():
         meta["what_agent_did"] = did.strip()
+    if brain.is_team:
+        meta["intake_of"] = intake_of
     meta.update({"disposition": "new", "kept_in": []})
     body = f"## Feedback\n\n{words.strip()}\n"
     if context.strip():
         body += f"\n## Context\n\n{context.strip()}\n"
-    record = Record(FEEDBACK, rid, folder / f"{rid}.md", meta, body)
+    record = Record(TEAM_FEEDBACK if brain.is_team else FEEDBACK, rid, folder / f"{rid}.md", meta, body)
     write_record(record)
     return record
 
 
-def intake_source(brain: Brain, source: str) -> Record:
+def intake_record(brain: Brain, pointer: str) -> Record:
     from . import team
 
-    match = team.POINTER.match(source.strip())
+    match = team.POINTER.match(pointer.strip())
     if not match:
-        raise BrainError(Finding("intake.bad_source", "--source", "In a team brain, feedback is an intake: its source is brain:<agent>/<feedback-id>.", "Pass the agent's feedback record that points to the team."), outcome="error")
+        raise BrainError(Finding("intake.bad_pointer", "--intake-of", "In a team brain, feedback is an intake: --intake-of is brain:<agent>/<feedback-id>.", "Pass the agent's feedback record that points to the team."), outcome="error")
+    source = pointer.strip()
     repo = team.require_repo(brain)
     agent = next((b for b in team.brains_in(repo) if b.name == match.group(1) and not b.is_team), None)
     heard = load(agent).by_folder["feedback"].get(match.group(2)) if agent else None

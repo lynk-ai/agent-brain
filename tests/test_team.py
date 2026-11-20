@@ -72,11 +72,12 @@ def test_a_full_feedback_round_trip(acme, repo):
     assert "feedback.undecided" in codes_of(writer)
     scaffold.set_disposition(writer, fid, "elsewhere", "a team hand-off rule", ["brain:acme-support"])
     assert codes_of(writer) == []
-    late = [f for f in checks.run(acme, today=dt.date.today() + dt.timedelta(days=15)) if f.code == "team.intake_missing"]
+    late = [f for f in checks.run(acme, today=dt.date.today() + dt.timedelta(days=15)) if f.code == "intake.missing"]
     assert len(late) == 1 and late[0].level == "warn"
 
-    intake = scaffold.add_feedback(acme, name="", words="", source_role="", kind="", source=f"brain:writer/{fid}")
+    intake = scaffold.add_feedback(acme, name="", words="", source_role="", kind="", source="", intake_of=f"brain:writer/{fid}")
     assert intake.meta["from"] == "editor" and "This menu was removed" in intake.body
+    assert intake.meta["source"] == "review of draft 112" and intake.meta["intake_of"] == f"brain:writer/{fid}"
     assert "feedback.undecided" in codes_of(acme)
     policy = scaffold.new_record(
         acme, "policies", "hand-billing-to-triage",
@@ -88,7 +89,7 @@ def test_a_full_feedback_round_trip(acme, repo):
     assert load(acme).get(f"feedback/{intake.id}").meta["kept_in"] == ["policies/hand-billing-to-triage"]
     assert "Hand every billing ticket to triage" in acme.skill_file.read_text()
     assert codes_of(acme) == [] and codes_of(writer) == []
-    assert not [f for f in checks.run(acme, today=dt.date.today() + dt.timedelta(days=15)) if f.code == "team.intake_missing"]
+    assert not [f for f in checks.run(acme, today=dt.date.today() + dt.timedelta(days=15)) if f.code == "intake.missing"]
 
 
 def test_an_agent_points_only_to_its_team_or_a_teammate(acme, repo):
@@ -100,15 +101,15 @@ def test_an_agent_points_only_to_its_team_or_a_teammate(acme, repo):
     assert codes_of(writer) == []
 
 
-def test_intake_source_must_resolve_and_point_here(acme, repo):
+def test_intake_of_must_resolve_and_point_here(acme, repo):
     with pytest.raises(BrainError) as exc:
-        scaffold.add_feedback(acme, name="n", words="w", source_role="r", kind="praise", source="chat")
-    assert exc.value.finding.code == "intake.bad_source"
+        scaffold.add_feedback(acme, name="n", words="w", source_role="r", kind="praise", source="chat", intake_of="chat")
+    assert exc.value.finding.code == "intake.bad_pointer"
     writer = find(repo / "brains" / "writer")
     fid = add_correction(writer)
     scaffold.set_disposition(writer, fid, "one-off", "a slip")
     with pytest.raises(BrainError) as exc:
-        scaffold.add_feedback(acme, name="", words="", source_role="", kind="", source=f"brain:writer/{fid}")
+        scaffold.add_feedback(acme, name="", words="", source_role="", kind="", source="", intake_of=f"brain:writer/{fid}")
     assert exc.value.finding.code == "intake.not_pointed"
 
 
@@ -135,6 +136,15 @@ def test_lanes_need_one_known_owner_per_work(acme):
     lanes.write_text(lanes.read_text() + "| writer work for support tickets | triage |\n| refunds | finance |\n")
     found = codes_of(acme)
     assert "lanes.duplicate" in found and "lanes.unknown_owner" in found
+
+
+def test_team_add_refuses_a_lane_that_would_break_the_table(acme, repo):
+    other = agent_without_routines(repo, "pipe")
+    other.agent_file.write_text(other.agent_file.read_text().replace("help-center article drafts", "drafts | replies"))
+    with pytest.raises(BrainError) as exc:
+        team.add(acme, other.root)
+    assert exc.value.finding.code == "lanes.bad_work"
+    assert "pipe" not in load(acme).by_folder["agents"] and codes_of(acme) == []
 
 
 def test_team_add_refuses_a_lane_another_agent_owns(acme, repo):
@@ -172,12 +182,14 @@ def test_team_routines_point_to_a_procedure_in_a_roster_agent(acme, repo):
     routine("hand-off")
     assert "routine.bad_procedure" in codes_of(acme)
     routine("triage:nope")
-    assert "link.unresolved" in codes_of(acme)
+    assert "routine.unresolved_procedure" in codes_of(acme)
+    routine("ghost:hand-off")
+    assert "routine.unresolved_procedure" in codes_of(acme)
     routine("triage:hand-off", owner="ghost")
     assert "routine.unknown_owner" in codes_of(acme)
 
 
-def test_team_add_moves_routines_and_renames_a_taken_id(repo):
+def test_team_add_moves_routines_under_the_agents_name(repo):
     crew = scaffold.init_team(repo / "brains" / "crew", "crew")
     finish_team(crew)
     for name in ("ana", "ben"):
@@ -186,9 +198,10 @@ def test_team_add_moves_routines_and_renames_a_taken_id(repo):
         agent.agent_file.write_text(agent.agent_file.read_text().replace("help-center article drafts", f"{name}'s work"))
         lines = team.add(find(crew.root), agent.root)
     routines = load(find(crew.root)).by_folder["routines"]
-    assert set(routines) == {"nightly-dream", "ben-nightly-dream"}
+    assert set(routines) == {"ana-nightly-dream", "ben-nightly-dream"}
     assert routines["ben-nightly-dream"].meta["procedure"] == "ben:run-the-dream"
-    assert any("was nightly-dream" in line for line in lines)
+    assert routines["ben-nightly-dream"].meta["name"] == "Nightly dream (ben)"
+    assert any("routine: ben-nightly-dream" in line for line in lines)
     assert codes_of(crew) == [] and codes_of(find(repo / "brains" / "ben")) == []
 
 
@@ -248,17 +261,20 @@ def test_team_remove_gives_back_lanes_and_routines(repo, capsys):
     project = ["--project", str(crew.root)]
     assert main(["team", "remove", "ana", *project]) == 2
     assert "nightly-dream" in capsys.readouterr().out
-    assert main(["team", "remove", "ana", "--routine", "nightly-dream=ben", *project]) == 0, capsys.readouterr().out
+    assert main(["team", "remove", "ana", "--routine", "ana-nightly-dream=ben", *project]) == 0, capsys.readouterr().out
     capsys.readouterr()
     ana = find(repo / "brains" / "ana")
     assert ana.team is None and load(ana).agent.meta["lane"] == ["ana's work"]
-    routine = load(find(crew.root)).by_folder["routines"]["nightly-dream"]
+    routine = load(find(crew.root)).by_folder["routines"]["ana-nightly-dream"]
     assert routine.meta["owner"] == "ben" and routine.meta["procedure"] == "ben:run-the-dream"
     assert codes_of(ana) == [] and codes_of(crew) == []
-    assert main(["team", "remove", "ben", "--routine", "nightly-dream=retire", "--routine", "ben-nightly-dream=back", *project]) == 0, capsys.readouterr().out
+    paused = crew.references / "routines" / "ben-nightly-dream.md"
+    paused.write_text(paused.read_text().replace("status: active", "status: paused"))
+    assert main(["team", "remove", "ben", "--routine", "ana-nightly-dream=retire", "--routine", "ben-nightly-dream=back", *project]) == 0, capsys.readouterr().out
     ben = find(repo / "brains" / "ben")
-    assert load(ben).by_folder["routines"]["ben-nightly-dream"].meta["procedure"] == "run-the-dream"
-    assert load(find(crew.root)).by_folder["routines"]["nightly-dream"].meta["status"] == "retired"
+    back = load(ben).by_folder["routines"]["nightly-dream"]
+    assert back.meta["procedure"] == "run-the-dream" and back.meta["name"] == "Nightly dream" and back.meta["status"] == "paused"
+    assert load(find(crew.root)).by_folder["routines"]["ana-nightly-dream"].meta["status"] == "retired"
     assert codes_of(ben) == []
     assert not load(find(crew.root)).by_folder["agents"]
 
@@ -299,3 +315,24 @@ def test_team_add_from_the_command_line(repo, capsys):
     out = capsys.readouterr().out
     assert out.startswith("ok: ") and "roster: ana from brains/ana" in out and "one commit" in out
     assert main(["team", "add", str(agent.root), "--project", str(agent.root)]) == 2
+
+
+def test_the_intake_wait_counts_from_a_reworded_elsewhere_line(acme, repo):
+    writer = find(repo / "brains" / "writer")
+    fid = add_correction(writer)
+    scaffold.set_disposition(writer, fid, "elsewhere", "a team rule", ["brain:acme-support"])
+    path = writer.references / "feedback" / f"{fid}.md"
+    path.write_text(path.read_text().replace(f"{dt.date.today().isoformat()}, elsewhere:", "- 2026-01-05 Set to Elsewhere, because"))
+    late = [f for f in checks.run(acme, today=dt.date(2026, 1, 25)) if f.code == "intake.missing"]
+    assert len(late) == 1 and "20 days" in late[0].message
+
+
+def test_index_in_an_agent_rewrites_its_team_roster(acme, repo, capsys):
+    from agent_brain.cli import main
+
+    writer = find(repo / "brains" / "writer")
+    writer.agent_file.write_text(writer.agent_file.read_text().replace("Drafts help-center articles from product changes", "Writes replies"))
+    assert codes_of(acme) == ["skill.index_stale"]
+    assert main(["index", "--project", str(writer.root)]) == 0
+    assert "team SKILL.md rewritten: acme-support" in capsys.readouterr().out
+    assert codes_of(acme) == [] and codes_of(writer) == []

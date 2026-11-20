@@ -185,19 +185,20 @@ def check_links(brain: Brain, records: Records, repo: Path | None = None) -> lis
 
 def check_feedback(brain: Brain, records: Records, today: dt.date) -> list[Finding]:
     findings: list[Finding] = []
+    record_kind, folder = ("policy", "policies") if brain.is_team else ("rule", "rules")
     for fb in records.by_folder["feedback"].values():
         where = brain.rel(fb.path)
         disposition = fb.meta.get("disposition")
         kept_in = as_list(fb.meta.get("kept_in"))
         if disposition == "kept" and not kept_in:
-            findings.append(Finding("feedback.kept_without_record", where, "It is kept, but kept_in names no record.", f"Run brain link {fb.id} rules/<id>, or brain new rule <id> --feedback {fb.id}."))
+            findings.append(Finding("feedback.kept_without_record", where, "It is kept, but kept_in names no record.", f"Run brain link {fb.id} {folder}/<id>, or brain new {record_kind} <id> --feedback {fb.id}."))
         if disposition == "elsewhere" and not kept_in:
             findings.append(Finding("feedback.elsewhere_pointer", where, "It is elsewhere, but kept_in does not say where.", POINTER_FIX))
         if disposition not in ("kept", "elsewhere") and kept_in:
             findings.append(Finding("feedback.linked_not_kept", where, f"It is {disposition}, but kept_in names records.", f"Run brain unlink {fb.id} <record> for each record, or link it with brain link."))
         if disposition == "new":
             findings.append(
-                Finding("feedback.undecided", where, "Nobody decided it yet.", f"Decide it in this turn: brain link {fb.id} <record>, brain new rule <id> --feedback {fb.id}, or brain feedback set {fb.id} <disposition> --reason.")
+                Finding("feedback.undecided", where, "Nobody decided it yet.", f"Decide it in this turn: brain link {fb.id} <record>, brain new {record_kind} <id> --feedback {fb.id}, or brain feedback set {fb.id} <disposition> --reason.")
             )
         if disposition in CLOSED_WITH_REASON and not fb.sections.get("Context"):
             findings.append(Finding("feedback.no_reason", where, f"It is {disposition}, with no reason.", f"Run brain feedback set {fb.id} {disposition} --reason \"<why>\"."))
