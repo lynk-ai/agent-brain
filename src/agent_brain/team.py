@@ -235,9 +235,9 @@ def check_routine(brain: Brain, routine, records: Records, agents: dict[str, Bra
         findings.append(Finding("routine.owner_not_runner", where, f"owner is {owner}, but the procedure is {agent_name}'s.", f"Give the routine to {agent_name}, or point it to a procedure in {owner}'s brain.", "warn"))
     agent = agents.get(agent_name)
     if agent is None:
-        findings.append(Finding("link.unresolved", where, f"procedure names agent {agent_name!r}, which is not on the roster.", "Name an agent from references/agents/."))
+        findings.append(Finding("routine.unresolved_procedure", where, f"procedure names agent {agent_name!r}, which is not on the roster.", "Name an agent from references/agents/."))
     elif pid not in load(agent).by_folder["procedures"]:
-        findings.append(Finding("link.unresolved", where, f"procedure names {pid!r}, which is not in {agent_name}'s brain.", f"Name a file from {agent_name}'s references/procedures/ without .md."))
+        findings.append(Finding("routine.unresolved_procedure", where, f"procedure names {pid!r}, which is not in {agent_name}'s brain.", f"Name a file from {agent_name}'s references/procedures/ without .md."))
     return findings
 
 
@@ -247,15 +247,17 @@ def check_intake(brain: Brain, records: Records, repo: Path) -> list[Finding]:
     by_name = {b.name: b for b in brains_in(repo) if not b.is_team}
     for fb in records.by_folder["feedback"].values():
         where = brain.rel(fb.path)
-        source = str(fb.meta.get("source") or "")
+        source = str(fb.meta.get("intake_of") or "")
+        if not source:
+            continue  # record.missing_field reports it.
         match = POINTER.match(source)
         if not match:
-            findings.append(Finding("intake.bad_source", where, f"source {source!r} is not brain:<agent>/<feedback-id>.", "Name the agent's feedback record that pointed it here."))
+            findings.append(Finding("intake.bad_pointer", where, f"intake_of {source!r} is not brain:<agent>/<feedback-id>.", "Name the agent's feedback record that pointed it here."))
             continue
         agent = by_name.get(match.group(1))
         heard = load(agent).by_folder["feedback"].get(match.group(2)) if agent else None
         if heard is None:
-            findings.append(Finding("intake.unresolved", where, f"source {source} names no feedback record in this repository.", "Name the agent's feedback record that pointed it here."))
+            findings.append(Finding("intake.unresolved", where, f"intake_of {source} names no feedback record in this repository.", "Name the agent's feedback record that pointed it here."))
         elif f"brain:{brain.name}" not in [str(v) for v in heard.meta.get("kept_in") or []]:
             findings.append(Finding("intake.not_pointed", where, f"{source} does not point to brain:{brain.name}.", f"In {match.group(1)}'s brain, run brain feedback set {match.group(2)} elsewhere --to brain:{brain.name} --reason \"<why>\"."))
     return findings
@@ -264,7 +266,7 @@ def check_intake(brain: Brain, records: Records, repo: Path) -> list[Finding]:
 def check_open_pointers(brain: Brain, records: Records, agents: dict[str, Brain], today) -> list[Finding]:
     from .records import as_date
 
-    taken = {str(fb.meta.get("source")) for fb in records.by_folder["feedback"].values()}
+    taken = {str(fb.meta.get("intake_of")) for fb in records.by_folder["feedback"].values()}
     findings = []
     for name, agent in sorted(agents.items()):
         for fb in load(agent).by_folder["feedback"].values():
@@ -276,8 +278,8 @@ def check_open_pointers(brain: Brain, records: Records, agents: dict[str, Brain]
             if since and (today - since).days > brain.config["intake_days"]:
                 findings.append(
                     Finding(
-                        "team.intake_missing", f"{agent.rel(fb.path)} in {name}", f"It points to the team for {(today - since).days} days, with no intake record.",
-                        f"Run brain feedback add --source brain:{name}/{fb.id} in the team brain, and decide it.", "warn",
+                        "intake.missing", f"{agent.rel(fb.path)} in {name}", f"It points to the team for {(today - since).days} days, with no intake record.",
+                        f"Run brain feedback add --intake-of brain:{name}/{fb.id} in the team brain, and decide it.", "warn",
                     )
                 )
     return findings
@@ -286,8 +288,22 @@ def check_open_pointers(brain: Brain, records: Records, agents: dict[str, Brain]
 def elsewhere_since(context: str):
     from .records import as_date
 
-    dates = re.findall(r"^(\d{4}-\d{2}-\d{2}), elsewhere:", context, re.MULTILINE)
+    # brain feedback set writes "<date>, elsewhere: <reason>", but a person may reword it; any dated line that says elsewhere counts.
+    dates = re.findall(r"^\W*(\d{4}-\d{2}-\d{2})\b.*\belsewhere\b", context, re.MULTILINE | re.IGNORECASE)
     return as_date(dates[-1]) if dates else None
+
+
+# A routine's team id carries its agent's name, so two agents' seeded routines never collide, whatever the join order.
+def team_routine_id(agent: str, rid: str) -> str:
+    return rid if rid.startswith(f"{agent}-") else f"{agent}-{rid}"
+
+
+def team_routine_name(agent: str, name: str) -> str:
+    return name if name.endswith(f" ({agent})") else f"{name} ({agent})"
+
+
+def agent_routine_id(agent: str, rid: str) -> str:
+    return rid.removeprefix(f"{agent}-") or rid
 
 
 def require_repo(team: Brain) -> Path:
@@ -340,21 +356,18 @@ def add(team: Brain, path: Path) -> list[str]:
     owned = {work_key(lane.work): lane for lane in lanes}
     new_lanes = []
     for work in [str(w) for w in (agent_records.agent.meta.get("lane") or [])] if agent_records.agent else []:
+        if "|" in work or "\n" in work:
+            raise BrainError(Finding("lanes.bad_work", str(path), f"The lane {work!r} holds a | or a line break, which would break the lanes table.", f"Reword the lane in {agent.name}'s agent.md, then run it again."))
         other = owned.get(work_key(work))
         if other is not None and other.owner != agent.name:
             raise BrainError(Finding("lanes.duplicate", str(path), f"{other.owner} already owns {work!r}.", f"Decide which agent owns it, and remove it from the other's lane before you run brain team add."))
         if other is None:
             new_lanes.append(Lane(work, agent.name, 0))
     routines = agent_records.by_folder["routines"]
-    # Every seeded agent brain has the same routine ids, so a taken id gets the agent's name in front.
-    taken = set(records.by_folder["routines"])
-    targets = {}
-    for rid in routines:
-        target = rid if rid not in taken else f"{agent.name}-{rid}"
-        if target in taken:
-            raise BrainError(Finding("team.routine_exists", f"routines/{rid}", f"The team already has a routine {rid} and {target}.", f"Rename {agent.name}'s routine file, then run it again."))
-        taken.add(target)
-        targets[rid] = target
+    targets = {rid: team_routine_id(agent.name, rid) for rid in routines}
+    for rid, target in targets.items():
+        if target in records.by_folder["routines"]:
+            raise BrainError(Finding("team.routine_exists", f"routines/{target}", f"The team already has a routine {target}.", f"Rename {agent.name}'s routine {rid}, then run it again."))
 
     lines = []
     entry = Record(AGENT_ENTRY, agent.name, team.references / "agents" / f"{agent.name}.md", {"name": agent.name, "source": source}, "")
@@ -371,14 +384,12 @@ def add(team: Brain, path: Path) -> list[str]:
         pointer = str(routine.meta.get("procedure") or "")
         routine.meta["procedure"] = pointer if ":" in pointer or not pointer else f"{agent.name}:{pointer}"
         target = targets[rid]
-        if target != rid:
-            routine.meta["name"] = f"{routine.meta.get('name', rid)} ({agent.name})"
+        routine.meta["name"] = team_routine_name(agent.name, str(routine.meta.get("name") or rid))
         moved = Record(TEAM_ROUTINE, target, team.references / "routines" / f"{target}.md", routine.meta, routine.body)
         moved.path.parent.mkdir(parents=True, exist_ok=True)
         write_record(moved)
         routine.path.unlink()
-        renamed = f" (was {rid})" if target != rid else ""
-        lines.append(f"  routine: {target}{renamed}, procedure {routine.meta['procedure']}")
+        lines.append(f"  routine: {target}, procedure {routine.meta['procedure']}")
     if agent_records.agent is not None and "lane" in agent_records.agent.meta:
         del agent_records.agent.meta["lane"]
         write_record(agent_records.agent)
@@ -421,8 +432,8 @@ def remove(crew: Brain, name: str, choices: dict[str, str]) -> list[str]:
         if choice == "back":
             if not str(routine.meta.get("procedure") or "").startswith(f"{name}:"):
                 raise BrainError(Finding("team.routine_choice", f"routines/{rid}", f"It runs another agent's procedure, so it cannot go back to {name}.", f"Pass --routine {rid}=retire or {rid}=<agent>."))
-            if rid in agent_records.by_folder["routines"]:
-                raise BrainError(Finding("team.routine_exists", f"routines/{rid}", f"{name}'s brain already has a routine {rid}.", "Rename one of them first."))
+            if agent_routine_id(name, rid) in agent_records.by_folder["routines"]:
+                raise BrainError(Finding("team.routine_exists", f"routines/{rid}", f"{name}'s brain already has a routine {agent_routine_id(name, rid)}.", "Rename one of them first."))
         elif choice != "retire":
             if choice == name or choice not in records.by_folder["agents"]:
                 raise BrainError(Finding("team.routine_choice", f"routines/{rid}", f"{choice!r} is not another agent on the roster.", "Name back, retire or an agent from references/agents/."), outcome="error")
@@ -434,11 +445,12 @@ def remove(crew: Brain, name: str, choices: dict[str, str]) -> list[str]:
     lines = []
     for rid, routine, choice, pid in moves:
         if choice == "back":
+            back = agent_routine_id(name, rid)
             routine.meta["procedure"] = pid
-            routine.meta["status"] = "active"
-            write_record(Record(ROUTINE, rid, agent.references / "routines" / f"{rid}.md", routine.meta, routine.body))
+            routine.meta["name"] = str(routine.meta.get("name") or back).removesuffix(f" ({name})")
+            write_record(Record(ROUTINE, back, agent.references / "routines" / f"{back}.md", routine.meta, routine.body))
             routine.path.unlink()
-            lines.append(f"  routine {rid}: back to {name}")
+            lines.append(f"  routine {rid}: back to {name} as {back}")
         elif choice == "retire":
             routine.meta["status"] = "retired"
             write_record(routine)

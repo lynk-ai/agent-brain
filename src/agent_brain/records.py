@@ -152,12 +152,26 @@ AGENT_ENTRY = Kind(
     {"name": Field("line", fix="Name the agent brain: its name in brain.yaml."), "source": Field("line", fix="Give the agent brain's folder, from the repository's top folder.")},
 )
 
+# A team's feedback is always an intake: an agent heard it, and intake_of names the agent's record.
+TEAM_FEEDBACK = Kind(
+    "feedback",
+    "feedback",
+    {
+        **{k: v for k, v in FEEDBACK.fields.items() if k not in ("disposition", "kept_in")},
+        "intake_of": Field("line", fix="Name the agent's record that points here: brain:<agent>/<feedback-id>."),
+        "disposition": FEEDBACK.fields["disposition"],
+        "kept_in": FEEDBACK.fields["kept_in"],
+    },
+    sections=FEEDBACK.sections,
+    optional_sections=FEEDBACK.optional_sections,
+)
+
 LANES = Kind("lanes", "", {"feedback": Field("list", required=False)}, sections=("Lanes",))
 LANES_FILE = "lanes.md"
 LANES_REF = "lanes"
 
 KINDS = {k.folder: k for k in (FEEDBACK, RULE, PROCEDURE, TOPIC, ROUTINE)}
-TEAM_KINDS = {k.folder: k for k in (AGENT_ENTRY, FEEDBACK, POLICY, TEAM_ROUTINE, TOPIC)}
+TEAM_KINDS = {k.folder: k for k in (AGENT_ENTRY, TEAM_FEEDBACK, POLICY, TEAM_ROUTINE, TOPIC)}
 # Feedback.kept_in and the CLI name a record as <folder>/<id>; only these may hold feedback.
 LINKABLE = ("rules", "procedures")
 TEAM_LINKABLE = ("policies", "routines", LANES_REF)
