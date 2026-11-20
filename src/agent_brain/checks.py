@@ -1,5 +1,7 @@
 import datetime as dt
 import re
+
+import yaml
 from pathlib import Path
 
 from . import index
@@ -244,7 +246,10 @@ def check_skill(brain: Brain, records: Records, repo: Path | None = None) -> lis
     if not brain.skill_file.is_file():
         return [Finding("skill.missing", where, "The skill has no SKILL.md.", "Write SKILL.md with name, description and the index markers.")]
     text = brain.skill_file.read_text()
-    meta, _ = split_front_matter(text)
+    try:
+        meta, _ = split_front_matter(text)
+    except yaml.YAMLError as exc:
+        return [Finding("skill.front_matter", where, f"SKILL.md's front matter is not valid YAML: {exc}.", "Fix the YAML between the --- lines. Quote a value that holds a colon or an apostrophe.")]
     meta = meta or {}
     if meta.get("name") != brain.name:
         findings.append(Finding("skill.name", where, f"SKILL.md's name is not {brain.name!r}, its folder's name.", f"Set name: {brain.name}."))

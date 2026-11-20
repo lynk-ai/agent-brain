@@ -99,6 +99,7 @@ Every command takes `--project`, before or after the command (the brain's folder
 - A link that does not resolve, or that points only one way.
 - A record with a missing or unknown field, a bad value, a missing body section, a bad file name or a duplicate name.
 - A SKILL.md agent block or index that differs from what `brain index` writes. A retired or proposed record is never in the index.
+- A SKILL.md whose front matter is not valid YAML (`skill.front_matter`).
 - A SKILL.md that links feedback, has no description or one over 1,024 characters, has more than 500 lines, or whose name is not its folder's.
 - A `TODO:` placeholder, a secret, contact details or a card number, a Markdown link that does not resolve, and a harness name from `brain.yaml` anywhere in the skill. URLs and code spans are not scanned for contact details.
 - Feedback dated in the future.
@@ -123,7 +124,7 @@ Each finding names its code in brackets. The codes are stable: `levels:` in brai
 - **Links:** `link.broken`, `link.one_way`, `link.target`, `link.unresolved`.
 - **Feedback:** `feedback.disposition`, `feedback.elsewhere_pointer`, `feedback.empty`, `feedback.future_date`, `feedback.intake_in_agent`, `feedback.kept_without_record`, `feedback.kind`, `feedback.linked`, `feedback.linked_not_kept`, `feedback.missing`, `feedback.no_did`, `feedback.no_reason`, `feedback.pending_too_long`, `feedback.pointer_not_elsewhere`, `feedback.undecided`, `feedback.use_link`.
 - **Rules, procedures and status:** `rule.stale`, `rule.unchecked`, `procedure.no_take_feedback`, `status.no_reason`, `new.feedback`, `new.kind`, `new.routine_in_team`, `new.rule`, `new.topic`.
-- **Skill and text:** `skill.agent_markers_missing`, `skill.agent_stale`, `skill.description`, `skill.index_stale`, `skill.lists_feedback`, `skill.markers_missing`, `skill.missing`, `skill.name`, `skill.size`, `skill.too_long`, `core.harness_name`, `data.personal`, `data.secret`, `data.sensitive`.
+- **Skill and text:** `skill.agent_markers_missing`, `skill.agent_stale`, `skill.description`, `skill.front_matter`, `skill.index_stale`, `skill.lists_feedback`, `skill.markers_missing`, `skill.missing`, `skill.name`, `skill.size`, `skill.too_long`, `core.harness_name`, `data.personal`, `data.secret`, `data.sensitive`.
 - **Team:** `team.agent_has_lane`, `team.agent_has_routine`, `team.agent_not_in_team`, `team.entry_name`, `team.no_repository`, `team.not_found`, `team.not_member`, `team.not_team`, `team.other_team`, `team.procedure_in_use`, `team.routine_choice`, `team.routine_exists`, `team.source_missing`.
 - **Lanes:** `lanes.agent_without_lane`, `lanes.bad_table`, `lanes.bad_work`, `lanes.duplicate`, `lanes.missing`, `lanes.unknown_owner`.
 - **Team routines:** `routine.bad_procedure`, `routine.owner_no_lane`, `routine.owner_not_runner`, `routine.unknown_owner`, `routine.unresolved_procedure`.
