@@ -1,14 +1,18 @@
 import argparse
 import datetime as dt
 import json
+import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, checks, harness, hooks, index, plugin, scaffold, team
+from . import __version__, adapters, checks, harness, hooks, index, plugin, scaffold, settings, team
+from . import load as loading
 from .brain import find, find_all, require_writable
-from .output import BLOCK, BrainError, Finding, Result, render_json, render_text
+from .output import BLOCK, WARN, BrainError, Finding, Result, render_json, render_text
 from .records import KINDS, LANES_REF, load
 
 DESCRIPTION = "Keep an agent's brain, or a team's brain, a skill in git, whole: feedback, rules, procedures, policies and topics, linked and checked."
@@ -16,7 +20,13 @@ DESCRIPTION = "Keep an agent's brain, or a team's brain, a skill in git, whole: 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    extra: list[str] = []
+    # argparse would read the harness's own flags after -- as brain's, so they are split off first.
+    if "--" in argv and "load" in argv[: argv.index("--")]:
+        argv, extra = argv[: argv.index("--")], argv[argv.index("--") + 1 :]
     args = parser.parse_args(argv)
+    args.harness_args = extra
     if not getattr(args, "handler", None):
         parser.print_help()
         return 0
@@ -143,8 +153,11 @@ def build_parser() -> argparse.ArgumentParser:
         hp.set_defaults(handler=handler, command=f"hook {event}")
         hp.add_argument("--host", choices=tuple(hooks.HOSTS), default="claude")
 
-    p = command("team", None, "Join an agent brain to a team brain, or take it out. Run it in the team brain.")
+    p = command("team", cmd_team_list, "List the team: each agent's display name, brain name and job, read live from the team brain. Its actions join an agent brain to the team, take it out, or save the team's path.")
     tsub = p.add_subparsers(title="team commands", metavar="<action>")
+    tp = tsub.add_parser("use", help="Save the path of the repository that holds the team brain; with no path, print the saved one.", parents=[common])
+    tp.set_defaults(handler=cmd_team_use, command="team use")
+    tp.add_argument("path", type=Path, nargs="?", help="the team brain's folder, or the repository that holds it")
     tp = tsub.add_parser("add", help="Add an agent brain to the roster, and move its lane and routines into the team brain.", parents=[common])
     tp.set_defaults(handler=cmd_team_add, command="team add")
     tp.add_argument("path", type=Path, help="the agent brain's folder, in the team brain's repository")
@@ -152,6 +165,12 @@ def build_parser() -> argparse.ArgumentParser:
     tp.set_defaults(handler=cmd_team_remove, command="team remove")
     tp.add_argument("agent", help="the agent's name on the roster")
     tp.add_argument("--routine", action="append", default=[], metavar="ID=CHOICE", help="for each routine the agent owns: <id>=back, <id>=retire or <id>=<another agent>; repeat for more")
+
+    p = command("load", cmd_load, "Start a coding agent session as one agent on the team, for that session only. Arguments after -- go to the harness.")
+    p.add_argument("who", help="the agent's display name, brain name, or a word of its job")
+    p.add_argument("--harness", choices=adapters.ADAPTERS, help="default the agent.md harness, or claude")
+    p.add_argument("--dry-run", action="store_true", help="print the command and start nothing")
+    p.add_argument("--no-fetch", action="store_true", help="do not fetch the team's repository or compare it with its upstream")
 
     command("version", cmd_version, "Print the version.")
     return parser
@@ -428,6 +447,78 @@ def cmd_team_remove(args) -> Result:
         "team remove", "ok", f"{args.agent} left team {crew.name}.", lines=lines,
         next=("git add both brains and commit them in one commit", "the agent brain and the team brain change together"),
     )
+
+
+def cmd_team_use(args) -> Result:
+    if args.path is None:
+        saved = settings.saved_team()
+        if saved is None:
+            return Result("team use", "ok", "No team path is saved.", value={"path": None, "file": str(settings.path())}, next=("brain team use <path>", "save the repository that holds the team brain"))
+        return Result("team use", "ok", f"The saved team path is {saved}.", value={"path": str(saved), "file": str(settings.path())})
+    folder = args.path.expanduser().resolve()
+    crew = loading.locate(folder, walk_without_git=True)
+    if crew is None:
+        raise BrainError(Finding("team.not_found", str(args.path), "No team brain in this folder, above it, or in its repository.", "Pass the team brain's folder, or the repository that holds it."), outcome="error")
+    where = settings.save_team(folder)
+    return Result("team use", "ok", f"Saved {folder}: team {crew.name}.", lines=[f"  settings: {where}"], value={"path": str(folder), "team": crew.name, "file": str(where)}, next=("brain team", "list who is on the team"))
+
+
+def cmd_team_list(args) -> Result:
+    crew, where = loading.resolve_team(args.project)
+    members = loading.members_of(crew)
+    value = {"team": crew.name, "root": str(crew.root), "from": where, "agents": [m.row() for m in members]}
+    return Result("team", "ok", f"Team {crew.name}: {len(members)} agents, from {where}.", lines=loading.roster_lines(members), value=value, next=("brain load <who>", "start a session as one of them"))
+
+
+def cmd_load(args) -> Result:
+    crew, where = loading.resolve_team(args.project)
+    members = loading.members_of(crew)
+    hits = loading.match(members, args.who)
+    if not hits:
+        finding = Finding("load.not_on_team", args.who, f"{args.who} is not on the team.", "Name an agent by its display name, its brain name or a word of its job.")
+        return Result("load", "error", f"{args.who} is not on the team {crew.name}.", [finding], lines=loading.roster_lines(members))
+    if len(hits) > 1:
+        finding = Finding("load.ambiguous", args.who, f"{len(hits)} agents match {args.who}.", "Name one by its display name or its brain name.")
+        return Result("load", "error", f"{args.who} matches {len(hits)} agents.", [finding], lines=loading.roster_lines(hits))
+    member = hits[0]
+    if member.brain is None:
+        raise BrainError(Finding("team.source_missing", member.name, f"{member.name}'s source is not an agent brain with an agent.md.", "Fix its entry in the team brain's references/agents/."), outcome="error")
+    repo = team.repo_root(crew) or crew.root
+    lines = [f"  team: {crew.name} at {crew.root}, from {where}", f"  agent: {member.display_name} ({member.name})"]
+    warnings: list[Finding] = []
+    if not args.no_fetch:
+        fresh = loading.freshness(repo)
+        behind = fresh.behind
+        commits = f"{behind} commit" + ("" if behind == 1 else "s")
+        if fresh.fetch_error:
+            warnings.append(Finding("load.not_fetched", str(repo), f"Could not fetch, so the team brain may be old: {fresh.fetch_error}", "Check the network, or pass --no-fetch.", WARN))
+        if not fresh.upstream:
+            lines.append("  the checkout has no upstream, so it is not compared")
+        if behind and not args.dry_run:
+            question = f"The team brain's checkout is {commits} behind its upstream. Go on anyway? [y/N] "
+            if not sys.stdin.isatty() or input(question).strip().lower() not in ("y", "yes"):
+                finding = Finding("load.behind", str(repo), f"The checkout is {commits} behind its upstream.", f"Run git -C {repo} pull, then brain load {args.who} again.")
+                return Result("load", "refused", f"The team brain is {commits} behind; nothing started.", [finding], lines=lines)
+        elif behind:
+            warnings.append(Finding("load.behind", str(repo), f"The checkout is {commits} behind its upstream.", f"Run git -C {repo} pull.", WARN))
+    _, _, problems = team.team_settings(crew)
+    checked = team.check_loads(crew, member.brain, member.meta, repo)
+    warnings += [Finding(f.code, f.file, f.message, f.fix, WARN) for f in [*problems, *checked.findings]]
+    lines += [f"  books from {source} are not checked: {crew.name}'s brain.yaml names no list for them" for source in checked.unchecked]
+    chosen = args.harness or member.meta.get("harness") or loading.DEFAULT_HARNESS
+    loads = team.loads_of(member.brain, member.meta)
+    brains = list(checked.resolved.values())
+    text = loading.instruction(member.display_name, [b.skill_file for b in brains], loads.books)
+    built = adapters.command(chosen, [b.root for b in brains], text, args.harness_args)
+    lines += [f"  harness: {harness.NAMES.get(chosen, chosen)}", "  command:", f"  {shlex.join(built)}"]
+    value = {"agent": member.row(), "team": crew.name, "harness": chosen, "instruction": text, "command": built}
+    if args.dry_run:
+        return Result("load", "ok", f"Dry run: {member.display_name} would start in {harness.NAMES.get(chosen, chosen)}; nothing started.", warnings, lines=lines, value=value)
+    if shutil.which(built[0]) is None:
+        raise BrainError(Finding("load.no_harness", built[0], f"{built[0]} is not on the PATH.", f"Install {harness.NAMES.get(chosen, chosen)}, or pass another --harness."), outcome="error")
+    started = Result("load", "ok", f"Starting {member.display_name} in {harness.NAMES.get(chosen, chosen)}.", warnings, lines=lines[:-2], value=value)
+    print(render_json(started) if args.json else render_text(started), file=sys.stderr)
+    os.execvp(built[0], built)
 
 
 def cmd_hooks_install(args) -> Result:
