@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from .brain import Brain
+from .harness import NAMES as HARNESSES
 from .output import Finding
 
 ID_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -123,6 +124,8 @@ AGENT = Kind(
         "decider": Field("line"),
         "roles": Field("any", required=False),
         "enforce_in_harness": Field("list", required=False),
+        # The harness brain load starts when no --harness is given; claude when it is left out.
+        "harness": Field("enum", required=False, choices=tuple(HARNESSES), fix=f"Set harness: to one of {', '.join(HARNESSES)}."),
     },
     sections=("Voice",),
 )
