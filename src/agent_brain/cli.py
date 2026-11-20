@@ -511,13 +511,13 @@ def cmd_load(args) -> Result:
     text = loading.instruction(member.display_name, [s.skill_file for s in skills], loads.books)
     plain = [s.folder for s in skills if s.plugin is None]
     built = adapters.command(chosen, [s.plugin for s in skills if s.plugin], text, args.harness_args, loading.outside(plain, Path.cwd()))
-    lines += [f"  harness: {harness.NAMES.get(chosen, chosen)}", "  command:", f"  {shlex.join(built)}"]
+    lines += [f"  harness: {harness.KNOWN.get(chosen, chosen)}", "  command:", f"  {shlex.join(built)}"]
     value = {"agent": member.row(), "team": crew.name, "harness": chosen, "instruction": text, "command": built}
     if args.dry_run:
-        return Result("load", "ok", f"Dry run: {member.display_name} would start in {harness.NAMES.get(chosen, chosen)}; nothing started.", warnings, lines=lines, value=value)
+        return Result("load", "ok", f"Dry run: {member.display_name} would start in {harness.KNOWN.get(chosen, chosen)}; nothing started.", warnings, lines=lines, value=value)
     if shutil.which(built[0]) is None:
-        raise BrainError(Finding("load.no_harness", built[0], f"{built[0]} is not on the PATH.", f"Install {harness.NAMES.get(chosen, chosen)}, or pass another --harness."), outcome="error")
-    started = Result("load", "ok", f"Starting {member.display_name} in {harness.NAMES.get(chosen, chosen)}.", warnings, lines=lines[:-2], value=value)
+        raise BrainError(Finding("load.no_harness", built[0], f"{built[0]} is not on the PATH.", f"Install {harness.KNOWN.get(chosen, chosen)}, or pass another --harness."), outcome="error")
+    started = Result("load", "ok", f"Starting {member.display_name} in {harness.KNOWN.get(chosen, chosen)}.", warnings, lines=lines[:-2], value=value)
     print(render_json(started) if args.json else render_text(started), file=sys.stderr)
     os.execvp(built[0], built)
 
