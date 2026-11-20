@@ -213,6 +213,7 @@ def check_team(brain: Brain, records: Records, today, repo: Path | None) -> list
 
     findings += check_intake(brain, records, repo)
     findings += check_open_pointers(brain, records, agents, today)
+    findings += check_team_loads(brain, agents, repo)
     return findings
 
 
@@ -473,3 +474,106 @@ def remove(crew: Brain, name: str, choices: dict[str, str]) -> list[str]:
     index.write(crew, load(crew), repo)
     reindex_members(crew, repo)
     return lines
+
+
+@dataclass(frozen=True)
+class Loads:
+    brain: str
+    skills: tuple[str, ...]
+    books: tuple[str, ...]
+
+    @property
+    def brains(self) -> list[str]:
+        # The agent's own brain first, then its skills, each once.
+        return list(dict.fromkeys([self.brain, *self.skills]))
+
+
+def loads_of(agent: Brain, meta: dict) -> Loads:
+    loads = meta.get("loads") if isinstance(meta.get("loads"), dict) else {}
+    own = loads.get("brain")
+    own = own[0] if isinstance(own, list) and own else own
+    return Loads(own if isinstance(own, str) and own else agent.name, tuple(str(s) for s in names_in(loads.get("skills"))), tuple(str(b) for b in names_in(loads.get("books"))))
+
+
+def names_in(value) -> list:
+    if isinstance(value, str):
+        return [value]
+    return [v for v in value if v] if isinstance(value, list) else []
+
+
+@dataclass
+class LoadCheck:
+    findings: list[Finding]
+    resolved: dict[str, Brain]
+    unchecked: list[str]
+
+
+def team_settings(team: Brain) -> tuple[set[str], dict[str, str], list[Finding]]:
+    problems = []
+    gaps = team.config.get("known_gaps") or []
+    if not isinstance(gaps, list) or not all(isinstance(g, str) for g in gaps):
+        problems.append(Finding("brain.config", f"{team.name}/brain.yaml", "known_gaps must be a list of skill or brain names.", "Write known_gaps: [<name>, <name>]."))
+        gaps = []
+    books = team.config.get("books") or {}
+    if not isinstance(books, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in books.items()):
+        problems.append(Finding("brain.config", f"{team.name}/brain.yaml", "books must map each book source to its list file.", "Write books: {bambooks: tools/bambooks-books.txt}."))
+        books = {}
+    return set(gaps), books, problems
+
+
+def book_ids(path: Path) -> set[str] | None:
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return None
+    return {line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")}
+
+
+def check_loads(team: Brain, agent: Brain, meta: dict, repo: Path, provided: dict[str, Brain] | None = None, lists: dict | None = None) -> LoadCheck:
+    # Shared by brain load, where each finding is a warning, and brain check on the team.
+    provided = provided if provided is not None else {b.name: b for b in brains_in(repo)}
+    lists = lists if lists is not None else {}
+    gaps, sources, _ = team_settings(team)
+    findings: list[Finding] = []
+    where = str(agent.agent_file.resolve().relative_to(repo.resolve()))
+    loads = loads_of(agent, meta)
+    resolved, unchecked = {}, []
+    for name in loads.brains:
+        if name in provided:
+            resolved[name] = provided[name]
+        elif name in gaps:
+            findings.append(Finding("load.known_gap", where, f"{agent.name} loads {name}, a known gap in {team.name}'s brain.yaml: no brain provides it yet.", f"Add its brain when it exists, then remove it from known_gaps.", "warn"))
+        else:
+            findings.append(Finding("load.not_provided", where, f"{agent.name} loads {name}, which no brain in this repository provides.", f"Fix the name in agent.md, add the brain, or list it under known_gaps in {team.name}'s brain.yaml."))
+    for entry in loads.books:
+        source, _, bid = entry.rpartition(":")
+        if not source or not bid:
+            findings.append(Finding("load.bad_book", where, f"The book {entry!r} is not written <source>:<book id>.", "Write it as bambooks:<book id>."))
+            continue
+        if source not in sources:
+            unchecked.append(source)
+            continue
+        if source not in lists:
+            lists[source] = book_ids(repo / sources[source])
+        if lists[source] is None:
+            findings.append(Finding("load.book_list_missing", where, f"The book list for {source}, {sources[source]}, cannot be read.", f"Fix books: in {team.name}'s brain.yaml, or add the file.", "warn"))
+        elif bid not in lists[source]:
+            findings.append(Finding("load.book_unlisted", where, f"{agent.name} loads the book {entry}, which is not in {sources[source]}.", f"Fix the id in agent.md, or add it to {sources[source]}.", "warn"))
+    return LoadCheck(findings, resolved, list(dict.fromkeys(unchecked)))
+
+
+def check_team_loads(team: Brain, agents: dict[str, Brain], repo: Path) -> list[Finding]:
+    provided = {b.name: b for b in brains_in(repo)}
+    lists: dict = {}
+    _, _, findings = team_settings(team)
+    unchecked: list[str] = []
+    for name, agent in sorted(agents.items()):
+        agent_record = load(agent).agent
+        if agent_record is None:
+            continue
+        result = check_loads(team, agent, agent_record.meta, repo, provided, lists)
+        findings += result.findings
+        unchecked += result.unchecked
+    for source in dict.fromkeys(unchecked):
+        findings.append(Finding("load.no_book_list", "brain.yaml", f"No book list for {source}, so its book ids are not checked.", f"Name its list file: books: {{{source}: <file from the repository's top folder>}}.", "warn"))
+    return findings
