@@ -69,6 +69,11 @@ def test_claude_adapter_builds_the_exact_command():
     assert built == ["claude", "--plugin-dir", "/r/brains/sivan", "--plugin-dir", "/r/brains/team", "--append-system-prompt", "You are Sivan.", "--model", "opus"]
 
 
+def test_claude_adapter_gives_a_plain_skill_folder_outside_the_repo_as_add_dir():
+    built = adapters.command("claude", [Path("/r/brains/sivan")], "You are Sivan.", [], [Path("/home/me/skills/style")])
+    assert built == ["claude", "--plugin-dir", "/r/brains/sivan", "--add-dir", "/home/me/skills/style", "--append-system-prompt", "You are Sivan."]
+
+
 def test_codex_adapter_builds_the_exact_command():
     built = adapters.command("codex", [Path("/r/brains/sivan")], 'You are Sivan.\nRead "/r/SKILL.md".', [])
     assert built == ["codex", "-c", 'developer_instructions="You are Sivan.\\nRead \\"/r/SKILL.md\\"."']
@@ -146,13 +151,62 @@ def test_a_book_not_in_the_list_warns_and_an_unlisted_source_is_skipped(crew, re
     code, out = dry(capsys, crew, "wes", "--json")
     data = json.loads(out)
     assert [f["code"] for f in data["findings"]] == ["load.book_unlisted"]
-    assert data["value"]["instruction"].endswith("Your books are in the Bambooks library: write-a-reply, gone-book.\nYour books from other: a-book.")
+    assert data["value"]["instruction"].endswith("Your books from bambooks: write-a-reply, gone-book.\nYour books from other: a-book.")
 
 
 def test_a_bad_book_entry_and_a_bad_team_setting_block_check(crew, repo):
     set_agent(repo, "writer", loads={"brain": "writer", "skills": ["acme-support"], "books": ["no-source"]})
     set_team_config(crew, "known_gaps: style-guide\n")
     assert sorted(f.code for f in checks.blocking(checks.run(find(crew.root)))) == ["brain.config", "load.bad_book"]
+
+
+def make_skill(folder: Path, name: str | None = None) -> Path:
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(f"---\nname: {name or folder.name}\ndescription: A plain skill.\n---\nBody.\n")
+    return folder
+
+
+def test_a_path_load_is_read_from_the_repository_top_and_gets_no_plugin_dir(crew, repo, capsys, monkeypatch):
+    style = make_skill(repo / "skills" / "style-guide")
+    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["./skills/style-guide", "acme-support"]})
+    assert checks.blocking(checks.run(find(crew.root))) == []
+    monkeypatch.chdir(repo / "brains")
+    code, out = dry(capsys, crew, "wes", "--json")
+    data = json.loads(out)
+    assert code == 0 and data["findings"] == []
+    built = data["value"]["command"]
+    assert str(style.resolve()) not in built and "--add-dir" not in built
+    files = data["value"]["instruction"].splitlines()[1:4]
+    assert files == [f"{(repo / 'brains' / 'writer').resolve()}/writer/SKILL.md", f"{style.resolve()}/SKILL.md", f"{(repo / 'brains' / 'acme-support').resolve()}/acme-support/SKILL.md"]
+
+
+def test_a_path_load_outside_the_working_repo_gets_add_dir(crew, repo, capsys, monkeypatch, tmp_path_factory):
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    style = make_skill(home / ".agents" / "skills" / "style-guide")
+    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["~/.agents/skills/style-guide"]})
+    monkeypatch.chdir(repo)
+    code, out = dry(capsys, crew, "wes", "--json")
+    built = json.loads(out)["value"]["command"]
+    assert built[built.index("--add-dir") + 1] == str(style.resolve())
+    assert built.count("--plugin-dir") == 1
+
+
+def test_a_path_load_with_no_skill_md_blocks_in_check_and_warns_in_load(crew, repo, capsys):
+    (repo / "skills" / "empty").mkdir(parents=True)
+    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["./skills/empty", "../nowhere"]})
+    assert [f.code for f in checks.blocking(checks.run(find(crew.root)))] == ["load.bad_path", "load.bad_path"]
+    code, out = dry(capsys, crew, "wes")
+    assert code == 0 and out.count("warn") == 2 and "[load.bad_path]" in out
+
+
+def test_a_path_load_whose_skill_md_names_another_skill_warns(crew, repo, capsys):
+    make_skill(repo / "skills" / "style-guide", name="house-style")
+    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["./skills/style-guide"]})
+    findings = checks.run(find(crew.root))
+    assert checks.blocking(findings) == [] and [f.code for f in findings if f.code.startswith("load.")] == ["load.skill_name"]
+    code, out = dry(capsys, crew, "wes")
+    assert "[load.skill_name]" in out
 
 
 def test_the_agent_md_harness_is_checked_and_picks_the_adapter(crew, repo, capsys):
