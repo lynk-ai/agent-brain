@@ -9,7 +9,7 @@ from pathlib import Path
 from . import __version__, checks, harness, hooks, index, plugin, scaffold, team
 from .brain import find, find_all, require_writable
 from .output import BLOCK, BrainError, Finding, Result, render_json, render_text
-from .records import KINDS, load
+from .records import KINDS, LANES_REF, load
 
 DESCRIPTION = "Keep an agent's brain, or a team's brain, a skill in git, whole: feedback, rules, procedures, policies and topics, linked and checked."
 
@@ -98,10 +98,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--feedback", action="append", default=[], help="a feedback id to link both ways; repeat for more")
     p.add_argument("--body-file", type=Path, help="the record's body (its ## sections), or - for stdin")
 
-    p = command("set-status", cmd_set_status, "Set a rule's or procedure's status, write the reason, and rewrite the index.")
-    p.add_argument("ref", help="rules/<id> or procedures/<id>; in a team brain policies/<id>")
-    p.add_argument("status", choices=("proposed", "active", "retired"))
-    p.add_argument("--reason", default="", help="required for retired; added to the rule's Why")
+    p = command("set-status", cmd_set_status, "Set a record's status, write the reason, and rewrite the index.")
+    p.add_argument("ref", help="rules/<id>, procedures/<id> or routines/<id>; in a team brain policies/<id> or routines/<id>")
+    p.add_argument("status", choices=("proposed", "active", "paused", "retired"), help="a rule, procedure or policy is proposed, active or retired; a routine is active, paused or retired")
+    p.add_argument("--reason", default="", help="required for retired; added to a rule's or policy's Why, or a record's Context")
 
     p = command("link", cmd_link, "Link a feedback to the record it became, both ways, and mark it kept.")
     p.add_argument("feedback")
@@ -325,10 +325,12 @@ def cmd_trace(args) -> Result:
     brain = find(args.project)
     records = load(brain)
     ref = args.ref.removesuffix(".md")
-    record = records.get(ref) if "/" in ref else next((r for r in records.all() if r.id == ref), None)
+    record = records.get(ref) if "/" in ref or ref == LANES_REF else next((r for r in records.all() if r.id == ref), None)
     if record is None:
-        raise BrainError(Finding("record.not_found", args.ref, "No record has that id.", "Name it as rules/<id>, procedures/<id> or feedback/<id>."), outcome="error")
-    lines = [f"  {record.ref}: {record.meta.get('name')} ({record.meta.get('status') or record.meta.get('disposition', '')})"]
+        names = "policies/<id>, routines/<id>, feedback/<id> or lanes" if brain.is_team else "rules/<id>, procedures/<id> or feedback/<id>"
+        raise BrainError(Finding("record.not_found", args.ref, "No record has that id.", f"Name it as {names}."), outcome="error")
+    shown = checks.ref_of(record)
+    lines = [f"  {shown}: {record.meta.get('name', 'the team lanes')} ({record.meta.get('status') or record.meta.get('disposition', '')})"]
     if record.kind.folder == "feedback":
         lines.append(f"    {record.meta.get('date')}, {record.meta.get('from')}, {record.meta.get('kind')}: {first_line(record.sections.get('Feedback', ''))}")
         for target in checks.as_list(record.meta.get("kept_in")):
@@ -347,7 +349,7 @@ def cmd_trace(args) -> Result:
         for t in checks.as_list(record.meta.get("topics")):
             topic = records.get(f"topics/{t}")
             lines.append(f"    topic {t}: {topic.meta.get('name') if topic else '(missing)'}")
-    return Result("trace", "ok", f"{record.ref}.", lines=lines, value={"ref": record.ref, "meta": record.meta})
+    return Result("trace", "ok", f"{shown}.", lines=lines, value={"ref": shown, "meta": record.meta})
 
 
 def first_line(text: str) -> str:

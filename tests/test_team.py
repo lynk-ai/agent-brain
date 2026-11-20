@@ -336,3 +336,52 @@ def test_index_in_an_agent_rewrites_its_team_roster(acme, repo, capsys):
     assert main(["index", "--project", str(writer.root)]) == 0
     assert "team SKILL.md rewritten: acme-support" in capsys.readouterr().out
     assert codes_of(acme) == [] and codes_of(writer) == []
+
+
+def test_set_status_on_a_team_routine_and_a_policy(repo, capsys):
+    from agent_brain.cli import main
+
+    assert main(["init", "acme", "--team", "--path", str(repo / "brains" / "acme")]) == 0
+    agent = agent_without_routines(repo, "ana")
+    project = ["--project", str(repo / "brains" / "acme")]
+    assert main(["team", "add", str(agent.root), *project]) == 0
+    assert main(["new", "routine", "x", "--owner", "ana", "--procedure", "ana:run-the-dream", *project]) == 0
+    capsys.readouterr()
+    assert main(["set-status", "routines/x", "retired", "--reason", "y", *project]) == 0, capsys.readouterr().out
+    routine = load(find(repo / "brains" / "acme")).by_folder["routines"]["x"]
+    assert routine.meta["status"] == "retired" and "retired: y" in routine.body
+    assert main(["set-status", "routines/x", "paused", *project]) == 0
+    assert main(["set-status", "routines/x", "proposed", *project]) == 2
+    assert "[status.value]" in capsys.readouterr().out
+    assert main(["new", "policy", "p", *project]) == 0
+    assert main(["set-status", "policies/p", "active", *project]) == 0
+    assert load(find(repo / "brains" / "acme")).by_folder["policies"]["p"].meta["status"] == "active"
+    capsys.readouterr()
+    assert main(["set-status", "rules/p", "active", *project]) == 2
+    out = capsys.readouterr().out
+    assert "set-status takes only policies/<id> or routines/<id>." in out and "Feedback" not in out
+
+
+def test_link_unlink_and_trace_name_the_team_targets(acme, repo, capsys):
+    from agent_brain.cli import main
+
+    writer = find(repo / "brains" / "writer")
+    fid = add_correction(writer)
+    scaffold.set_disposition(writer, fid, "elsewhere", "a team rule", ["brain:acme-support"])
+    intake = scaffold.add_feedback(acme, name="", words="", source_role="", kind="", source="", intake_of=f"brain:writer/{fid}")
+    project = ["--project", str(acme.root)]
+    capsys.readouterr()
+    for command in (["link", intake.id, "rules/x"], ["unlink", intake.id, "procedures/x"], ["link", intake.id, "agent"]):
+        assert main([*command, *project]) == 2
+        out = capsys.readouterr().out
+        assert "Feedback links only to policies/<id>, routines/<id> or lanes." in out and "or agent" not in out
+    assert main(["link", intake.id, "lanes", *project]) == 0
+    capsys.readouterr()
+    assert main(["trace", "lanes", *project]) == 0
+    assert f"from feedback {intake.id}" in capsys.readouterr().out
+    assert main(["trace", f"feedback/{intake.id}", *project]) == 0
+    assert "kept in lanes" in capsys.readouterr().out
+    assert main(["trace", "rules/nope", *project]) == 2
+    assert "policies/<id>, routines/<id>, feedback/<id> or lanes" in capsys.readouterr().out
+    assert main(["link", fid, "x/y", "--project", str(writer.root)]) == 2
+    assert "rules/<id>, procedures/<id> or agent." in capsys.readouterr().out
