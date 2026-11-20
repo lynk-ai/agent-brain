@@ -270,3 +270,26 @@ def test_index_adds_the_agent_block_to_an_older_skill(brain):
     assert "skill.agent_markers_missing" in codes(brain)
     index.write(brain, load(brain))
     assert codes(brain) == []
+
+
+def test_bad_yaml_in_skill_md_is_a_finding_not_a_crash(brain):
+    text = brain.skill_file.read_text()
+    brain.skill_file.write_text(text.replace("description: Help-center", "description: 'Help-center writer's", 1))
+    found = checks.run(brain)
+    assert [f.code for f in found if f.code.startswith("skill.")] == ["skill.front_matter"]
+    assert "skill.front_matter" in codes(brain)
+
+
+def test_a_record_of_plain_values_is_written_in_block_style(tmp_path):
+    from agent_brain.records import AGENT_ENTRY, Record
+
+    path = tmp_path / "writer.md"
+    write_record(Record(AGENT_ENTRY, "writer", path, {"name": "writer", "source": "brains/writer"}, ""))
+    assert path.read_text() == "---\nname: writer\nsource: brains/writer\n---\n"
+    assert read_record(AGENT_ENTRY, path).meta == {"name": "writer", "source": "brains/writer"}
+
+
+def test_lists_stay_inline_when_a_record_is_written(brain):
+    fid = add_correction(brain)
+    text = (brain.references / "feedback" / f"{fid}.md").read_text()
+    assert "kept_in: []" in text and "disposition: new" in text and "{" not in text.split("---\n")[1]

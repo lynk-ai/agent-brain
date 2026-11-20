@@ -226,7 +226,12 @@ def read_record(kind: Kind, path: Path) -> Record:
 
 
 def write_record(record: Record) -> None:
-    front = yaml.safe_dump(record.meta, sort_keys=False, allow_unicode=True, width=1000, default_flow_style=None)
+    # Dumped key by key: PyYAML writes a mapping of plain values as one flow map, {name: x, source: y},
+    # which line-based readers cannot parse. Lists and nested maps stay inline.
+    front = "".join(
+        yaml.safe_dump({key: value}, sort_keys=False, allow_unicode=True, width=1000, default_flow_style=None if isinstance(value, (list, dict)) else False)
+        for key, value in record.meta.items()
+    )
     body = record.body.lstrip("\n") if record.body.strip() else ""
     record.path.write_text(f"---\n{front}---\n{body}")
 

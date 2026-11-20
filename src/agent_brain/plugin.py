@@ -27,7 +27,11 @@ def git_root_or_cwd() -> Path:
 
 
 def skill_meta(brain: Brain) -> dict:
-    meta, _ = split_front_matter(brain.skill_file.read_text()) if brain.skill_file.is_file() else (None, "")
+    # check_skill reports bad YAML as skill.front_matter, so here it reads as no metadata.
+    try:
+        meta, _ = split_front_matter(brain.skill_file.read_text()) if brain.skill_file.is_file() else (None, "")
+    except yaml.YAMLError:
+        return {}
     return meta or {}
 
 
