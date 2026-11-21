@@ -24,9 +24,6 @@ def init(folder: Path, name: str, git: bool = True, seed: bool = True, display_n
     refs = skill / "references"
     for sub in ("feedback", "rules", "procedures", "topics", "routines"):
         (refs / sub).mkdir(parents=True, exist_ok=True)
-    for sub in ("reports", "harness"):
-        (folder / sub).mkdir(parents=True, exist_ok=True)
-        (folder / sub / ".gitkeep").write_text("")
     (refs / "feedback" / ".gitkeep").write_text("")
     (refs / "rules" / ".gitkeep").write_text("")
 
@@ -48,11 +45,9 @@ def init(folder: Path, name: str, git: bool = True, seed: bool = True, display_n
 def init_team(folder: Path, name: str, git: bool = True) -> Brain:
     check_new_folder(folder, name)
     refs = folder / name / "references"
-    for sub in ("agents", "feedback", "policies", "routines", "topics"):
+    for sub in ("feedback", "policies", "routines", "topics"):
         (refs / sub).mkdir(parents=True, exist_ok=True)
         (refs / sub / ".gitkeep").write_text("")
-    (folder / "reports").mkdir(parents=True, exist_ok=True)
-    (folder / "reports" / ".gitkeep").write_text("")
     (folder / CONFIG_FILE).write_text(template("team/brain.yaml", name))
     (folder / name / "SKILL.md").write_text(template("team/SKILL.md", name))
     (refs / "lanes.md").write_text(template("team/lanes.md", name))

@@ -281,12 +281,12 @@ def test_bad_yaml_in_skill_md_is_a_finding_not_a_crash(brain):
 
 
 def test_a_record_of_plain_values_is_written_in_block_style(tmp_path):
-    from agent_brain.records import AGENT_ENTRY, Record
+    from agent_brain.records import TOPIC, Record
 
-    path = tmp_path / "writer.md"
-    write_record(Record(AGENT_ENTRY, "writer", path, {"name": "writer", "source": "brains/writer"}, ""))
-    assert path.read_text() == "---\nname: writer\nsource: brains/writer\n---\n"
-    assert read_record(AGENT_ENTRY, path).meta == {"name": "writer", "source": "brains/writer"}
+    path = tmp_path / "writing.md"
+    write_record(Record(TOPIC, "writing", path, {"name": "Writing", "description": "How drafts are written."}, ""))
+    assert path.read_text() == "---\nname: Writing\ndescription: How drafts are written.\n---\n"
+    assert read_record(TOPIC, path).meta == {"name": "Writing", "description": "How drafts are written."}
 
 
 def test_lists_stay_inline_when_a_record_is_written(brain):

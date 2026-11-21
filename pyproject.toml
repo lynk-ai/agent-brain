@@ -1,6 +1,6 @@
 [project]
 name = "agent-brain"
-version = "0.4.0"
+version = "0.5.0"
 description = "Keep an agent's brain, or a team's brain, a skill in git, whole: feedback, rules, procedures, policies and topics, linked and checked."
 readme = "README.md"
 license = "MIT"

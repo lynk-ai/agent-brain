@@ -60,10 +60,10 @@ def test_a_team_of_three_agents_with_no_routines_passes(acme, repo):
     assert "## Roster" in text and "(writer)" in text and "Lanes: writer work for support tickets." in text
     assert "## Routines" in text
     writer = find(repo / "brains" / "writer")
-    assert writer.team == "acme-support" and writer.config["format"] == 2
+    assert writer.team == "acme-support" and writer.config["format"] == 3
     assert "lane" not in load(writer).agent.meta
     assert "**Team:** acme-support." in writer.skill_file.read_text()
-    assert (acme.references / "agents" / "writer.md").read_text().count("source: brains/writer") == 1
+    assert find(acme.root).config["agents"].count("brains/writer") == 1
 
 
 def test_a_full_feedback_round_trip(acme, repo):
@@ -144,7 +144,7 @@ def test_team_add_refuses_a_lane_that_would_break_the_table(acme, repo):
     with pytest.raises(BrainError) as exc:
         team.add(acme, other.root)
     assert exc.value.finding.code == "lanes.bad_work"
-    assert "pipe" not in load(acme).by_folder["agents"] and codes_of(acme) == []
+    assert "pipe" not in team.roster(find(acme.root)) and codes_of(acme) == []
 
 
 def test_team_add_refuses_a_lane_another_agent_owns(acme, repo):
@@ -153,7 +153,7 @@ def test_team_add_refuses_a_lane_another_agent_owns(acme, repo):
     with pytest.raises(BrainError) as exc:
         team.add(acme, other.root)
     assert exc.value.finding.code == "lanes.duplicate"
-    assert "other-writer" not in load(acme).by_folder["agents"]
+    assert "other-writer" not in team.roster(find(acme.root))
 
 
 def test_roster_drift_blocks(acme, repo):
@@ -165,8 +165,8 @@ def test_roster_drift_blocks(acme, repo):
 
 
 def test_a_roster_source_must_be_an_agent_brain_in_this_team(acme, repo):
-    entry = acme.references / "agents" / "writer.md"
-    entry.write_text(entry.read_text().replace("brains/writer", "brains/nowhere"))
+    config = acme.root / "brain.yaml"
+    config.write_text(config.read_text().replace("brains/writer", "brains/nowhere"))
     assert "team.source_missing" in codes_of(acme)
 
 
@@ -205,12 +205,12 @@ def test_team_add_moves_routines_under_the_agents_name(repo):
     assert codes_of(crew) == [] and codes_of(find(repo / "brains" / "ben")) == []
 
 
-def test_a_format_one_brain_warns_and_a_newer_one_is_refused(repo, brain):
+def test_an_older_format_blocks_and_says_what_to_move_and_a_newer_one_is_refused(repo, brain):
     config = brain.root / "brain.yaml"
-    config.write_text(config.read_text().replace("format: 2\n", ""))
+    config.write_text(config.read_text().replace("format: 3\n", "format: 2\n"))
     found = checks.run(find(brain.root))
-    assert [f.code for f in found] == ["brain.format_missing"] and found[0].level == "warn"
-    config.write_text("format: 3\n" + config.read_text())
+    assert [f.code for f in found] == ["brain.format_old"] and found[0].level == "block" and "skills: and books:" in found[0].fix
+    config.write_text(config.read_text().replace("format: 2\n", "format: 4\n"))
     with pytest.raises(BrainError) as exc:
         find(brain.root)
     assert exc.value.finding.code == "brain.format_newer"
@@ -276,7 +276,7 @@ def test_team_remove_gives_back_lanes_and_routines(repo, capsys):
     assert back.meta["procedure"] == "run-the-dream" and back.meta["name"] == "Nightly dream" and back.meta["status"] == "paused"
     assert load(find(crew.root)).by_folder["routines"]["ana-nightly-dream"].meta["status"] == "retired"
     assert codes_of(ben) == []
-    assert not load(find(crew.root)).by_folder["agents"]
+    assert team.roster(find(crew.root)) == {}
 
 
 def test_team_brain_kinds_are_its_own(acme, repo):

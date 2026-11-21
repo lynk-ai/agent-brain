@@ -11,8 +11,9 @@ CONFIG_FILE = "brain.yaml"
 COPY_MARKER = ".brain-source.yaml"
 # brain load's snapshot of a team's default branch: read-only, and never the brain's repository.
 SNAPSHOT_MARKER = ".brain-snapshot.yaml"
-# The brain.yaml format this CLI writes. A brain.yaml with no format is format 1, which reads as 2.
-FORMAT = 2
+# The brain.yaml format this CLI writes. Format 3 holds a team's roster in agents: and agent.md's skills and books;
+# brain check blocks an older brain and says what to move.
+FORMAT = 3
 KINDS = ("agent", "team")
 
 DEFAULTS = {

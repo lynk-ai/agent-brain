@@ -24,7 +24,7 @@ def read() -> dict:
     try:
         return tomllib.loads(where.read_text())
     except tomllib.TOMLDecodeError as exc:
-        raise BrainError(Finding("settings.unreadable", str(where), f"It is not valid TOML: {exc}.", f"Fix it, or delete it and run brain team use <path>."), outcome="error")
+        raise BrainError(Finding("settings.unreadable", str(where), f"It is not valid TOML: {exc}.", f"Fix it, or delete it and run brain use <path>."), outcome="error")
 
 
 def saved_team() -> Path | None:

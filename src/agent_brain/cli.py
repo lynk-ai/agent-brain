@@ -120,7 +120,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("feedback")
     p.add_argument("target")
 
-    command("index", cmd_index, "Rewrite the SKILL.md index from the active rules and procedures.")
+    p = command("index", cmd_index, "Rewrite SKILL.md from agent.md and the active rules and procedures. Only its front matter is written by hand.")
+    p.add_argument("--replace", action="store_true", help="also replace hand-written text outside the front matter; move it into agent.md, a rule, a procedure or the lanes first")
     p = command("check", cmd_check, "Run every check. Exit 3 on any block finding.")
     p.add_argument("--all", action="store_true", help="check every brain under --project, or under this folder")
     p.add_argument("--staged", action="store_true", help="check what git has staged in the repository, not the working tree")
@@ -155,9 +156,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = command("team", cmd_team_list, "List the team: each agent's display name, brain name and job, read live from the team brain. Its actions join an agent brain to the team, take it out, or save the team's path.")
     tsub = p.add_subparsers(title="team commands", metavar="<action>")
-    tp = tsub.add_parser("use", help="Save the path of the repository that holds the team brain; with no path, print the saved one.", parents=[common])
-    tp.set_defaults(handler=cmd_team_use, command="team use")
-    tp.add_argument("path", type=Path, nargs="?", help="the team brain's folder, or the repository that holds it")
     tp = tsub.add_parser("add", help="Add an agent brain to the roster, and move its lane and routines into the team brain.", parents=[common])
     tp.set_defaults(handler=cmd_team_add, command="team add")
     tp.add_argument("path", type=Path, help="the agent brain's folder, in the team brain's repository")
@@ -166,8 +164,11 @@ def build_parser() -> argparse.ArgumentParser:
     tp.add_argument("agent", help="the agent's name on the roster")
     tp.add_argument("--routine", action="append", default=[], metavar="ID=CHOICE", help="for each routine the agent owns: <id>=back, <id>=retire or <id>=<another agent>; repeat for more")
 
+    p = command("use", cmd_use, "Save the folder brain load and brain team read from: a team brain, the repository that holds it, or one agent brain with no team. With no path, print the saved one.")
+    p.add_argument("path", type=Path, nargs="?", help="a team brain's folder, the repository that holds it, or an agent brain's folder")
+
     p = command("load", cmd_load, "Start a coding agent session as one agent on the team, for that session only. Arguments after -- go to the harness.")
-    p.add_argument("who", help="the agent's display name, brain name, or a word of its job")
+    p.add_argument("who", nargs="?", help="the agent's display name, brain name, or a word of its job; leave it out for one agent brain with no team")
     p.add_argument("--harness", choices=adapters.ADAPTERS, help="default the agent.md harness, or claude")
     p.add_argument("--dry-run", action="store_true", help="print the command and start nothing")
     p.add_argument("--no-fetch", action="store_true", help="do not fetch the team's repository; load the default branch as last fetched")
@@ -186,6 +187,9 @@ def cmd_init(args) -> Result:
     else:
         brain = scaffold.init(folder, args.name, git=not args.no_git, seed=not args.no_seed, display_name=args.display_name)
     lines = [f"  created {folder}", f"  the skill: {brain.skill_dir}"]
+    repo = scaffold.git_root(folder)
+    domains = {str(b.config.get("domain")) for b in team.brains_in(repo) if b.is_team and b.config.get("domain")} if repo else set()
+    lines += [f"  note: this repository's team uses the domain {d}; an agent brain on it is named {d}-<role>-brain." for d in sorted(domains) if not args.team and not args.name.startswith(f"{d}-")]
     if not args.no_git:
         repo = scaffold.git_root(folder)
         if repo:
@@ -286,18 +290,18 @@ def cmd_index(args) -> Result:
     brain = find(args.project)
     require_writable(brain)
     records = load(brain)
-    if not brain.skill_file.is_file() or not index.write(brain, records):
+    if not brain.skill_file.is_file() or not index.write(brain, records, replace=args.replace):
         raise BrainError(Finding("skill.markers_missing", brain.rel(brain.skill_file), "SKILL.md has no index markers.", f"Add the lines {index.START} and {index.END}."))
     if brain.is_team:
         if records.lanes is None:
             team.write_lanes(brain, records, [])
         repo = team.repo_root(brain)
-        index.write(brain, load(brain), repo)
+        index.write(brain, load(brain), repo, replace=args.replace)
         # Each member's SKILL.md copies its lanes from lanes.md, so a team index rewrites theirs too.
         names = team.reindex_members(brain, repo) if repo else []
         policies = sum(1 for r in records.by_folder["policies"].values() if r.meta.get("status") == "active")
         lines = [f"  agent SKILL.md rewritten: {', '.join(names)}"] if names else []
-        return Result("index", "ok", f"SKILL.md index: {len(records.by_folder['agents'])} agents, {policies} policies.", lines=lines, next=("brain check --all", "confirm the team and its agents are whole"))
+        return Result("index", "ok", f"SKILL.md index: {len(team.roster(brain, repo))} agents, {policies} policies.", lines=lines, next=("brain check --all", "confirm the team and its agents are whole"))
     lines = []
     if brain.team:
         # The team's roster copies this agent's job, so the team index changes with agent.md.
@@ -390,10 +394,10 @@ def cmd_status(args) -> Result:
         counts[folder] = tally
     pending = sorted(f.id for f in records.by_folder["feedback"].values() if f.meta.get("disposition") in ("new", "pending"))
     proposed = sorted(r.ref for r in records.all() if r.kind.folder in ("rules", "procedures", "policies") and r.meta.get("status") == "proposed")
-    lines = [f"  folder: {brain.root}", f"  reports: {brain.root / 'reports'}"]
+    lines = [f"  folder: {brain.root}"]
     lines += [f"  {folder}: " + (", ".join(f"{n} {k}" for k, n in sorted(t.items())) or "none") for folder, t in counts.items()]
     lines += [f"  new or pending: feedback/{p}" for p in pending] + [f"  proposed: {p}" for p in proposed]
-    value = {"root": str(brain.root), "reports": str(brain.root / "reports"), "counts": counts, "pending": pending, "proposed": proposed}
+    value = {"root": str(brain.root), "counts": counts, "pending": pending, "proposed": proposed}
     return Result("status", "ok", f"Brain {brain.name}.", lines=lines, value=value)
 
 
@@ -450,18 +454,17 @@ def cmd_team_remove(args) -> Result:
     )
 
 
-def cmd_team_use(args) -> Result:
+def cmd_use(args) -> Result:
     if args.path is None:
         saved = settings.saved_team()
         if saved is None:
-            return Result("team use", "ok", "No team path is saved.", value={"path": None, "file": str(settings.path())}, next=("brain team use <path>", "save the repository that holds the team brain"))
-        return Result("team use", "ok", f"The saved team path is {saved}.", value={"path": str(saved), "file": str(settings.path())})
+            return Result("use", "ok", "No path is saved.", value={"path": None, "file": str(settings.path())}, next=("brain use <path>", "save a team brain's or an agent brain's folder"))
+        return Result("use", "ok", f"The saved path is {saved}.", value={"path": str(saved), "file": str(settings.path())})
     folder = args.path.expanduser().resolve()
-    crew = loading.locate(folder, walk_without_git=True)
-    if crew is None:
-        raise BrainError(Finding("team.not_found", str(args.path), "No team brain in this folder, above it, or in its repository.", "Pass the team brain's folder, or the repository that holds it."), outcome="error")
+    found, _ = loading.resolve_brain(folder)
     where = settings.save_team(folder)
-    return Result("team use", "ok", f"Saved {folder}: team {crew.name}.", lines=[f"  settings: {where}"], value={"path": str(folder), "team": crew.name, "file": str(where)}, next=("brain team", "list who is on the team"))
+    kind = f"team {found.name}" if found.is_team else f"agent brain {found.name}"
+    return Result("use", "ok", f"Saved {folder}: {kind}.", lines=[f"  settings: {where}"], value={"path": str(folder), "brain": found.name, "team": found.is_team, "file": str(where)}, next=("brain team" if found.is_team else "brain load", "list who is on the team" if found.is_team else "start a session as this agent"))
 
 
 def cmd_team_list(args) -> Result:
@@ -472,9 +475,9 @@ def cmd_team_list(args) -> Result:
 
 
 def cmd_load(args) -> Result:
-    crew, where = loading.resolve_team(args.project)
+    crew, where = loading.resolve_brain(args.project)
     repo = team.repo_root(crew) or crew.root
-    lines = [f"  team: {crew.name} at {crew.root}, from {where}"]
+    lines = [f"  {'team' if crew.is_team else 'agent brain, with no team'}: {crew.name} at {crew.root}, from {where}"]
     warnings: list[Finding] = []
     taken = None
     if args.checkout:
@@ -490,7 +493,7 @@ def cmd_load(args) -> Result:
             if behind and not args.dry_run:
                 question = f"The team brain's checkout is {commits} behind its upstream. Go on anyway? [y/N] "
                 if not sys.stdin.isatty() or input(question).strip().lower() not in ("y", "yes"):
-                    finding = Finding("load.behind", str(repo), f"The checkout is {commits} behind its upstream.", f"Run git -C {repo} pull, then brain load {args.who} --checkout again.")
+                    finding = Finding("load.behind", str(repo), f"The checkout is {commits} behind its upstream.", f"Run git -C {repo} pull, then brain load {args.who or ''} --checkout again.")
                     return Result("load", "refused", f"The team brain is {commits} behind; nothing started.", [finding], lines=lines)
             elif behind:
                 warnings.append(Finding("load.behind", str(repo), f"The checkout is {commits} behind its upstream.", f"Run git -C {repo} pull.", WARN))
@@ -505,21 +508,28 @@ def cmd_load(args) -> Result:
             rel = crew.root.resolve().relative_to(repo.resolve())
             found = snapshot.brain_in(made.folder, rel)
             if found is None:
-                raise BrainError(Finding("load.not_in_snapshot", str(rel), f"The team brain {rel} is not on {made.ref} at {made.commit[:12]}.", "Merge it to the default branch, or pass --checkout."), outcome="error")
+                raise BrainError(Finding("load.not_in_snapshot", str(rel), f"The brain {rel} is not on {made.ref} at {made.commit[:12]}.", "Merge it to the default branch, or pass --checkout."), outcome="error")
             crew, repo = found, made.folder
             taken = {"ref": made.ref, "commit": made.commit, "folder": str(made.folder)}
             lines.append(f"  brain: {made.ref} at {made.commit[:12]}, from {made.folder}")
-    members = loading.members_of(crew, repo)
-    hits = loading.match(members, args.who)
+    if crew.is_team:
+        members = loading.members_of(crew, repo)
+        if not args.who:
+            finding = Finding("load.no_agent", crew.name, "Name the agent to load.", "Pass its display name, its brain name or a word of its job.")
+            return Result("load", "error", f"Name an agent on the team {crew.name}.", [finding], lines=loading.roster_lines(members))
+    else:
+        alone = loading.member_of(crew)
+        members = [alone] if alone is not None else []
+    hits = loading.match(members, args.who) if args.who else members
     if not hits:
         finding = Finding("load.not_on_team", args.who, f"{args.who} is not on the team.", "Name an agent by its display name, its brain name or a word of its job.")
-        return Result("load", "error", f"{args.who} is not on the team {crew.name}.", [finding], lines=loading.roster_lines(members))
+        return Result("load", "error", f"{args.who} is not on the team {crew.name}." if crew.is_team else f"{args.who} is not {crew.name}.", [finding], lines=loading.roster_lines(members))
     if len(hits) > 1:
         finding = Finding("load.ambiguous", args.who, f"{len(hits)} agents match {args.who}.", "Name one by its display name or its brain name.")
         return Result("load", "error", f"{args.who} matches {len(hits)} agents.", [finding], lines=loading.roster_lines(hits))
     member = hits[0]
     if member.brain is None:
-        raise BrainError(Finding("team.source_missing", member.name, f"{member.name}'s source is not an agent brain with an agent.md.", "Fix its entry in the team brain's references/agents/."), outcome="error")
+        raise BrainError(Finding("team.source_missing", member.name, f"{member.name}'s source is not an agent brain with an agent.md.", "Fix its folder in agents: in the team's brain.yaml."), outcome="error")
     lines.append(f"  agent: {member.display_name} ({member.name})")
     _, _, problems = team.team_settings(crew)
     checked = team.check_loads(crew, member.brain, member.meta, repo)
@@ -532,7 +542,7 @@ def cmd_load(args) -> Result:
     plain = [s.folder for s in skills if s.plugin is None]
     built = adapters.command(chosen, [s.plugin for s in skills if s.plugin], text, args.harness_args, loading.outside(plain, Path.cwd()))
     lines += [f"  harness: {harness.KNOWN.get(chosen, chosen)}", "  command:", f"  {shlex.join(built)}"]
-    value = {"agent": member.row(), "team": crew.name, "snapshot": taken, "harness": chosen, "instruction": text, "command": built}
+    value = {"agent": member.row(), "team": crew.name if crew.is_team else None, "snapshot": taken, "harness": chosen, "instruction": text, "command": built}
     if args.dry_run:
         return Result("load", "ok", f"Dry run: {member.display_name} would start in {harness.KNOWN.get(chosen, chosen)}; nothing started.", warnings, lines=lines, value=value)
     if shutil.which(built[0]) is None:

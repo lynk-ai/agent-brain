@@ -1,7 +1,7 @@
-format: 2
+format: 3
 name: {{name}}
 # Days after which pending feedback, and a rule's checked date, show as warnings.
 pending_days: 14
 checked_days: 90
-# Harness details the skill may not name. They belong in harness/<harness>/.
+# Harness details the skill may not name: the harness is agent.md's harness field, and harness knowledge belongs in a book.
 harness_names: [".claude/", ".codex/", ".cursor/", ".agents/skills", "settings.local.json"]

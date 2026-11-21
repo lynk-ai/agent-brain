@@ -10,9 +10,9 @@
 - `src/agent_brain/load.py`: `brain team` and `brain load`: finding the team brain, matching an agent, the freshness check and the one fixed session instruction. The load checks are in `team.py` (`check_loads`), shared with `brain check`.
 - `src/agent_brain/harness.py`: `NAMES`, the harnesses brain installs into, hooks and detects, and `KNOWN`, every harness an agent.md may name (adds Grok Bot).
 - `src/agent_brain/adapters.py`: the harness adapters `brain load` starts: the exact command for Claude Code and Codex.
-- `src/agent_brain/settings.py`: the one user setting, the team's path (`brain team use`). `BRAIN_CONFIG` names another file, for tests.
+- `src/agent_brain/settings.py`: the one user setting, the saved path of a team brain or one agent brain (`brain use`). `BRAIN_CONFIG` names another file, for tests.
 - `src/agent_brain/checks.py`: every check. Each returns findings, and none writes a file.
-- `src/agent_brain/index.py`: the generated SKILL.md index between the markers.
+- `src/agent_brain/index.py`: SKILL.md, generated whole: the opening, agent and index blocks between their markers. Only the front matter is hand-written.
 - `src/agent_brain/scaffold.py`: everything that writes: init, feedback, new records, link, unlink, install.
 - `src/agent_brain/hooks.py`: the git pre-commit hook and the Claude Code Stop and SessionStart hooks.
 - `src/agent_brain/templates/`: what `brain init` seeds. The procedures are adapted from the book.
@@ -24,7 +24,7 @@
 - A new check comes with a test that plants a record that fails it.
 - Seeded templates must pass `brain check` once agent.md and the description are filled in: no `TODO:` text and no harness names in them.
 - A team brain and its agents' brains are in one repository. Every link between them is a path or a name checked offline, also in `check --staged`, which has no `.git`: pass the top folder as `repo`.
-- A change to brain.yaml's meaning raises `FORMAT` in `brain.py`, and the CLI reads every older format.
+- A change to brain.yaml's meaning raises `FORMAT` in `brain.py`. An older format blocks in `brain check` with a fix that says what to move (`brain.format_old`).
 
 ## Commands
 - Test: `.venv/bin/pytest -q`
