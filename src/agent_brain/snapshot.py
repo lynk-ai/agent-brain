@@ -107,6 +107,15 @@ def extra_paths(folder: Path) -> list[str]:
     return [p for p in dict.fromkeys(wanted) if not (folder / p).exists()]
 
 
+def brain_paths(repo: Path, commit: str, folder: str) -> list[str]:
+    # A brain at the repository's top shares it with other files, so only its own are taken: not the whole repository.
+    if folder != ".":
+        return [folder]
+    config = yaml.safe_load(git(repo, "show", f"{commit}:{CONFIG_FILE}") or "") or {}
+    name = config.get("name") if isinstance(config, dict) else None
+    return [CONFIG_FILE, ".claude-plugin", "plugin.json", *([name] if isinstance(name, str) and name else [])]
+
+
 def existing(repo: Path, commit: str, paths: list[str]) -> list[str]:
     listed = git(repo, "ls-tree", "--name-only", commit, "--", *paths) if paths else ""
     return [p for p in paths if p in (listed or "").splitlines()]
@@ -137,8 +146,8 @@ def build(repo: Path, ref: str, commit: str, folder: Path) -> None:
     building.mkdir(parents=True)
     try:
         listed = git(repo, "ls-tree", "-r", "--name-only", commit) or ""
-        brains = sorted({str(Path(p).parent) for p in listed.splitlines() if Path(p).name == CONFIG_FILE and str(Path(p).parent) != "."})
-        extract(repo, commit, brains, building)
+        brains = sorted({str(Path(p).parent) for p in listed.splitlines() if Path(p).name == CONFIG_FILE})
+        extract(repo, commit, existing(repo, commit, [p for b in brains for p in brain_paths(repo, commit, b)]), building)
         extract(repo, commit, existing(repo, commit, extra_paths(building)), building)
         (building / MARKER).write_text(yaml.safe_dump({"repo": str(repo), "ref": ref, "commit": commit}, sort_keys=False))
         if folder.exists() and not (folder / MARKER).is_file():

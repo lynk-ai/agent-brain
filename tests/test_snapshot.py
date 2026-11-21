@@ -125,3 +125,28 @@ def test_prune_keeps_the_newest_and_the_recent_snapshots(cache, monkeypatch, tmp
     removed = snapshot.prune(cache, cache / "h")
     assert sorted(p.name for p in removed) == ["g", "i"]
     assert sorted(p.name for p in cache.iterdir() if p.is_dir()) == ["a", "b", "c", "d", "e", "f", "h"]
+
+
+def test_a_brain_at_the_repository_top_loads_from_its_snapshot(tmp_path_factory, cache, capsys, monkeypatch):
+    from conftest import fill
+    from agent_brain import scaffold
+
+    monkeypatch.setenv("BRAIN_CONFIG", str(tmp_path_factory.mktemp("settings") / "config.toml"))
+    top = tmp_path_factory.mktemp("solo") / "solo"
+    brain = scaffold.init(top, "solo")
+    fill(brain)
+    (top / "src").mkdir()
+    (top / "src" / "app.py").write_text("print('the rest of the repository')\n")
+    git(top, "add", "-A")
+    git(top, *COMMIT, "-m", "solo")
+    remote = tmp_path_factory.mktemp("remote") / "solo.git"
+    git(top, "clone", "-q", "--bare", str(top), str(remote))
+    clone = tmp_path_factory.mktemp("clone") / "solo"
+    git(top, "clone", "-q", str(remote), str(clone))
+    code, out = run(capsys, "load", "--dry-run", "--json", "--project", str(clone))
+    data = json.loads(out)
+    assert code == 0, out
+    assert data["value"]["snapshot"]["commit"] == head(clone)
+    folder = cache.parent / "solo" / head(clone)[:12]
+    assert data["value"]["command"][2] == str(folder.resolve())
+    assert (folder / "solo" / "SKILL.md").is_file() and not (folder / "src").exists()
