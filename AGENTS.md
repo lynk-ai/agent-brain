@@ -6,6 +6,7 @@
 - `src/agent_brain/brain.py`: brain.yaml: `format` (this CLI writes 2, reads 1 as 2, refuses newer), `kind` (agent or team), `team`.
 - `src/agent_brain/records.py`: the record types as hard-coded field specs: an agent brain's (`KINDS`) and a team brain's (`TEAM_KINDS`, plus lanes.md). There is no schema language.
 - `src/agent_brain/team.py`: everything that crosses brains: the team checks, the lanes table, `team add` and `team remove`.
+- `src/agent_brain/snapshot.py`: `brain load`'s read-only snapshot of the team repository's default branch, one per commit in the cache folder, and its cleanup.
 - `src/agent_brain/load.py`: `brain team` and `brain load`: finding the team brain, matching an agent, the freshness check and the one fixed session instruction. The load checks are in `team.py` (`check_loads`), shared with `brain check`.
 - `src/agent_brain/harness.py`: `NAMES`, the harnesses brain installs into, hooks and detects, and `KNOWN`, every harness an agent.md may name (adds Grok Bot).
 - `src/agent_brain/adapters.py`: the harness adapters `brain load` starts: the exact command for Claude Code and Codex.

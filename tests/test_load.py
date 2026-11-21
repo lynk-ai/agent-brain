@@ -56,7 +56,8 @@ def run(capsys, *argv):
 
 
 def dry(capsys, crew, *argv):
-    return run(capsys, "load", *argv, "--dry-run", "--no-fetch", "--project", str(crew.root))
+    # The working folder as it is: these tests check what a load resolves, not where the snapshot comes from.
+    return run(capsys, "load", *argv, "--dry-run", "--no-fetch", "--checkout", "--project", str(crew.root))
 
 
 def test_the_team_brain_with_loads_passes_its_checks(crew, repo):
@@ -274,17 +275,17 @@ def behind(crew, repo, tmp_path_factory):
 
 def test_a_checkout_behind_its_upstream_asks_before_it_starts(behind, capsys, monkeypatch):
     project = str(behind / "brains" / "acme-support")
-    code, out = run(capsys, "load", "tara", "--dry-run", "--project", project)
+    code, out = run(capsys, "load", "tara", "--checkout", "--dry-run", "--project", project)
     assert code == 0 and "1 commit behind" in out and "[load.behind]" in out
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
-    code, out = run(capsys, "load", "tara", "--project", project)
+    code, out = run(capsys, "load", "tara", "--checkout", "--project", project)
     assert code == 3 and "nothing started" in out
     started = []
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
     monkeypatch.setattr("builtins.input", lambda question: "y")
     monkeypatch.setattr("agent_brain.cli.shutil.which", lambda name: f"/bin/{name}")
     monkeypatch.setattr("agent_brain.cli.os.execvp", lambda file, argv: started.append(argv))
-    run(capsys, "load", "tara", "--project", project)
+    run(capsys, "load", "tara", "--checkout", "--project", project)
     assert started and started[0][0] == "claude"
     assert started[0][2] == str((behind / "brains" / "triage").resolve())
 
