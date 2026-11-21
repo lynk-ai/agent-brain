@@ -1,0 +1,127 @@
+"""Write docs/findings.md from the Finding(...) calls in src/agent_brain: every code, its level, its message and its fix.
+
+    python tools/findings_doc.py           # rewrite docs/findings.md
+    python tools/findings_doc.py --check   # exit 1 when docs/findings.md differs from the code
+"""
+
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT / "src" / "agent_brain"
+DOC = ROOT / "docs" / "findings.md"
+GROUPS = [
+    ("brain", "Brain and config"), ("cli", "Brain and config"), ("check", "Brain and config"), ("settings", "Brain and config"),
+    ("record", "Records"), ("agent", "Records"), ("link", "Links"), ("feedback", "Feedback"), ("rule", "Rules, procedures and status"),
+    ("procedure", "Rules, procedures and status"), ("status", "Rules, procedures and status"), ("new", "Rules, procedures and status"),
+    ("skill", "Skill and text"), ("core", "Skill and text"), ("data", "Skill and text"), ("team", "Team"), ("lanes", "Lanes"),
+    ("routine", "Team routines"), ("intake", "Intake"), ("load", "Load"), ("init", "Setup"), ("install", "Setup"), ("hooks", "Setup"), ("plugin", "Setup"),
+]
+ORDER = list(dict.fromkeys(title for _, title in GROUPS))
+
+
+def text_of(node, names: dict | None = None) -> str:
+    # An f-string's expressions become <...>, so a template reads as a sentence. A name resolves to the text it was given.
+    names = names or {}
+    if isinstance(node, ast.Name) and node.id in names:
+        return text_of(names[node.id], {k: v for k, v in names.items() if k != node.id})
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value if isinstance(v, ast.Constant) else "<...>" for v in node.values)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return text_of(node.left, names) + text_of(node.right, names)
+    if isinstance(node, ast.IfExp):
+        return text_of(node.body, names)
+    return "<...>"
+
+
+def assigned(nodes) -> dict:
+    # Plain one-name assignments: the module's text constants, or a function's local texts. A name given two texts is left out, so no row shows the wrong one.
+    names, seen = {}, set()
+    for node in nodes:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            key = node.targets[0].id
+            if key in seen:
+                names.pop(key, None)
+            else:
+                names[key] = node.value
+            seen.add(key)
+    return names
+
+
+def level_of(node) -> str:
+    if node is None:
+        return "block"
+    if isinstance(node, ast.Constant) and node.value in ("warn", "block"):
+        return node.value
+    if isinstance(node, ast.Name) and node.id in ("WARN", "BLOCK"):
+        return node.id.lower()
+    return "block or warn"
+
+
+def findings() -> dict[str, list[tuple[str, str, str]]]:
+    found: dict[str, list[tuple[str, str, str]]] = {}
+    for path in sorted(SOURCE.glob("*.py")):
+        tree = ast.parse(path.read_text())
+        module = assigned(tree.body)
+        scopes = [(tree, module)] + [(f, {**module, **assigned(ast.walk(f))}) for f in ast.walk(tree) if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        calls: dict[int, tuple] = {}
+        for scope, names in scopes:
+            for node in ast.walk(scope):
+                if isinstance(node, ast.Call):
+                    calls[id(node)] = (node, names)
+        for node, names in calls.values():
+            if not (getattr(node.func, "id", None) == "Finding" and node.args):
+                continue
+            code = node.args[0]
+            if not (isinstance(code, ast.Constant) and isinstance(code.value, str)):
+                continue
+            args = node.args + [None] * (5 - len(node.args))
+            level = next((k.value for k in node.keywords if k.arg == "level"), args[4])
+            row = (" ".join(text_of(args[2], names).split()), " ".join(text_of(args[3], names).split()), level_of(level))
+            if row not in found.setdefault(code.value, []):
+                found[code.value].append(row)
+    return found
+
+
+def group_of(code: str) -> str:
+    prefix = code.split(".")[0]
+    return next(title for p, title in GROUPS if p == prefix)
+
+
+def cell(text: str) -> str:
+    # A message built whole at run time has no fixed words to show.
+    if not any(c.isalpha() for c in text.replace("<...>", "")):
+        return "(written at run time)"
+    return text.replace("|", "\\|")
+
+
+def render() -> str:
+    by_group: dict[str, list[str]] = {}
+    for code, rows in sorted(findings().items()):
+        for message, fix, level in rows:
+            by_group.setdefault(group_of(code), []).append(f"| `{code}` | {level} | {cell(message)} | {cell(fix)} |")
+    lines = [
+        "# Finding codes",
+        "",
+        "Every finding `brain` reports, written from the code by `tools/findings_doc.py`. Do not edit this file: run `python tools/findings_doc.py` after a change to a finding. A test fails when it differs from the code.",
+        "",
+        "A **block** finding fails `brain check` (exit 3) and stops a commit. A **warn** finding is reported and fails nothing. A code that a command reports when it cannot run, such as `init.not_empty` or `load.no_agent`, shows as block here and exits 2. `brain load` reports its load checks as warnings. `<...>` stands for a value filled in at run time, such as a file or an id. A brain can change a code's level in its brain.yaml (`levels:`). See [the reference](reference.md#change-a-checks-level).",
+        "",
+    ]
+    for title in ORDER:
+        if title not in by_group:
+            continue
+        lines += [f"## {title}", "", "| Code | Level | Message | Fix |", "|---|---|---|---|", *by_group[title], ""]
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    text = render()
+    if "--check" in sys.argv:
+        sys.exit(0 if DOC.is_file() and DOC.read_text() == text else 1)
+    DOC.parent.mkdir(exist_ok=True)
+    DOC.write_text(text)
+    print(f"wrote {DOC.relative_to(ROOT)}: {sum(len(r) for r in findings().values())} rows, {len(findings())} codes")

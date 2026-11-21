@@ -113,8 +113,8 @@ def require_writable(brain: Brain) -> None:
     snapshot = next((top / SNAPSHOT_MARKER for top in (brain.root, *brain.root.parents) if (top / SNAPSHOT_MARKER).is_file()), None)
     if snapshot is not None:
         made = yaml.safe_load(snapshot.read_text()) or {}
-        fix = f"Change the brain on a branch in its repository, {made.get('repo')}, and open a pull request. brain load --checkout loads that branch."
-        raise BrainError(Finding("brain.snapshot", str(brain.skill_dir), f"This is a snapshot brain load made of {made.get('ref')} at {str(made.get('commit'))[:12]}. A change here never reaches its repository.", fix))
+        snapshot_fix = f"Change the brain on a branch in its repository, {made.get('repo')}, and open a pull request. brain load --checkout loads that branch."
+        raise BrainError(Finding("brain.snapshot", str(brain.skill_dir), f"This is a snapshot brain load made of {made.get('ref')} at {str(made.get('commit'))[:12]}. A change here never reaches its repository.", snapshot_fix))
     if not brain.copy and (not source or in_git(brain.root)):
         return
     repo, path = source.get("repo"), source.get("path")
@@ -143,7 +143,7 @@ def load_config(path: Path) -> dict:
         raise BrainError(Finding("brain.config", path.name, f"format must be a whole number, not {version!r}.", f"Set format: {FORMAT}."), outcome="error")
     if version > FORMAT:
         raise BrainError(
-            Finding("brain.format_newer", str(path), f"{CONFIG_FILE} is format {version}; this brain reads up to format {FORMAT}.", "Update brain: uv tool upgrade agent-brain."), outcome="error"
+            Finding("brain.format_newer", str(path), f"{CONFIG_FILE} is format {version}; this brain reads up to format {FORMAT}.", "Upgrade brain: uv tool install --force 'agent-brain @ git+https://github.com/lynk-ai/agent-brain@<tag>', with the newest tag."), outcome="error"
         )
     if data.get("kind", "agent") not in KINDS:
         raise BrainError(Finding("brain.config", path.name, f"kind must be agent or team, not {data.get('kind')!r}.", "Set kind: team, or leave it out for an agent brain."), outcome="error")

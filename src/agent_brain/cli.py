@@ -98,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     fp.set_defaults(handler=cmd_feedback_list, command="feedback list")
     fp.add_argument("--pending", action="store_true", help="only feedback that is new or pending")
 
-    p = command("new", cmd_new, "Write a record skeleton at status proposed: a rule, procedure, topic or routine, or in a team brain a policy, routine or topic.")
+    p = command("new", cmd_new, "Write a record skeleton: a rule, procedure or policy starts proposed, a routine active, and a topic has no status. In a team brain: a policy, routine or topic.")
     p.add_argument("kind", choices=("rule", "procedure", "topic", "routine", "policy"))
     p.add_argument("id", help="the file name without .md: lowercase words joined by hyphens")
     for flag in ("name", "description", "scope", "trigger", "outputs", "procedure", "receiver", "owner"):
@@ -110,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = command("set-status", cmd_set_status, "Set a record's status, write the reason, and rewrite the index.")
     p.add_argument("ref", help="rules/<id>, procedures/<id> or routines/<id>; in a team brain policies/<id> or routines/<id>")
-    p.add_argument("status", choices=("proposed", "active", "paused", "retired"), help="a rule, procedure or policy is proposed, active or retired; a routine is active, paused or retired")
+    p.add_argument("status", choices=("proposed", "active", "paused", "retired"), help="a rule, procedure or policy is proposed, active or retired; an agent brain's routine is active or paused; a team routine is active, paused or retired")
     p.add_argument("--reason", default="", help="required for retired; added to a rule's or policy's Why, or a record's Context")
 
     p = command("link", cmd_link, "Link a feedback to the record it became, both ways, and mark it kept.")
@@ -137,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = command("hooks", None, "Install the checks into git and the harness.")
     hsub = p.add_subparsers(title="hooks commands", metavar="<action>")
-    hp = hsub.add_parser("install", help="Install the pre-commit hook, and the Claude Code Stop and SessionStart hooks.", parents=[common])
+    hp = hsub.add_parser("install", help="Install the pre-commit hook, and the Stop hook (and SessionStart for Claude Code and Codex) of the harness running this command or each --harness.", parents=[common])
     hp.set_defaults(handler=cmd_hooks_install, command="hooks install")
     hp.add_argument("--repo", type=Path, help="the git repository's top folder; default the brain's repository")
     hp.add_argument("--harness", action="append", choices=tuple(harness.NAMES), default=[], help="a harness to install hooks for; repeat for more; default the one running this command")
