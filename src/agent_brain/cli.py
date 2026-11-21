@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, adapters, checks, harness, hooks, index, plugin, scaffold, settings, team
+from . import __version__, adapters, checks, harness, hooks, index, plugin, scaffold, settings, snapshot, team
 from . import load as loading
 from .brain import find, find_all, require_writable
 from .output import BLOCK, WARN, BrainError, Finding, Result, render_json, render_text
@@ -170,7 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("who", help="the agent's display name, brain name, or a word of its job")
     p.add_argument("--harness", choices=adapters.ADAPTERS, help="default the agent.md harness, or claude")
     p.add_argument("--dry-run", action="store_true", help="print the command and start nothing")
-    p.add_argument("--no-fetch", action="store_true", help="do not fetch the team's repository or compare it with its upstream")
+    p.add_argument("--no-fetch", action="store_true", help="do not fetch the team's repository; load the default branch as last fetched")
+    p.add_argument("--checkout", action="store_true", help="load the team's working folder as it is, to test a branch, not a snapshot of the default branch")
 
     command("version", cmd_version, "Print the version.")
     return parser
@@ -472,7 +473,43 @@ def cmd_team_list(args) -> Result:
 
 def cmd_load(args) -> Result:
     crew, where = loading.resolve_team(args.project)
-    members = loading.members_of(crew)
+    repo = team.repo_root(crew) or crew.root
+    lines = [f"  team: {crew.name} at {crew.root}, from {where}"]
+    warnings: list[Finding] = []
+    taken = None
+    if args.checkout:
+        lines.append("  brain: the working folder as it is (--checkout)")
+        if not args.no_fetch:
+            fresh = loading.freshness(repo)
+            behind = fresh.behind
+            commits = f"{behind} commit" + ("" if behind == 1 else "s")
+            if fresh.fetch_error:
+                warnings.append(Finding("load.not_fetched", str(repo), f"Could not fetch, so the team brain may be old: {fresh.fetch_error}", "Check the network, or pass --no-fetch.", WARN))
+            if not fresh.upstream:
+                lines.append("  the checkout has no upstream, so it is not compared")
+            if behind and not args.dry_run:
+                question = f"The team brain's checkout is {commits} behind its upstream. Go on anyway? [y/N] "
+                if not sys.stdin.isatty() or input(question).strip().lower() not in ("y", "yes"):
+                    finding = Finding("load.behind", str(repo), f"The checkout is {commits} behind its upstream.", f"Run git -C {repo} pull, then brain load {args.who} --checkout again.")
+                    return Result("load", "refused", f"The team brain is {commits} behind; nothing started.", [finding], lines=lines)
+            elif behind:
+                warnings.append(Finding("load.behind", str(repo), f"The checkout is {commits} behind its upstream.", f"Run git -C {repo} pull.", WARN))
+    else:
+        made = snapshot.prepare(repo, crew.name, fetch_first=not args.no_fetch)
+        if made.fetch_error:
+            warnings.append(Finding("load.not_fetched", str(repo), f"Could not fetch, so the brain is the default branch as last fetched: {made.fetch_error}", "Check the network, or pass --no-fetch.", WARN))
+        if made.folder is None:
+            warnings.append(Finding("load.no_snapshot", str(repo), "The team's repository has no remote default branch, so its working folder loads as it is.", "Add a remote and fetch it, or pass --checkout.", WARN))
+            lines.append("  brain: the working folder as it is (no remote default branch)")
+        else:
+            rel = crew.root.resolve().relative_to(repo.resolve())
+            found = snapshot.brain_in(made.folder, rel)
+            if found is None:
+                raise BrainError(Finding("load.not_in_snapshot", str(rel), f"The team brain {rel} is not on {made.ref} at {made.commit[:12]}.", "Merge it to the default branch, or pass --checkout."), outcome="error")
+            crew, repo = found, made.folder
+            taken = {"ref": made.ref, "commit": made.commit, "folder": str(made.folder)}
+            lines.append(f"  brain: {made.ref} at {made.commit[:12]}, from {made.folder}")
+    members = loading.members_of(crew, repo)
     hits = loading.match(members, args.who)
     if not hits:
         finding = Finding("load.not_on_team", args.who, f"{args.who} is not on the team.", "Name an agent by its display name, its brain name or a word of its job.")
@@ -483,24 +520,7 @@ def cmd_load(args) -> Result:
     member = hits[0]
     if member.brain is None:
         raise BrainError(Finding("team.source_missing", member.name, f"{member.name}'s source is not an agent brain with an agent.md.", "Fix its entry in the team brain's references/agents/."), outcome="error")
-    repo = team.repo_root(crew) or crew.root
-    lines = [f"  team: {crew.name} at {crew.root}, from {where}", f"  agent: {member.display_name} ({member.name})"]
-    warnings: list[Finding] = []
-    if not args.no_fetch:
-        fresh = loading.freshness(repo)
-        behind = fresh.behind
-        commits = f"{behind} commit" + ("" if behind == 1 else "s")
-        if fresh.fetch_error:
-            warnings.append(Finding("load.not_fetched", str(repo), f"Could not fetch, so the team brain may be old: {fresh.fetch_error}", "Check the network, or pass --no-fetch.", WARN))
-        if not fresh.upstream:
-            lines.append("  the checkout has no upstream, so it is not compared")
-        if behind and not args.dry_run:
-            question = f"The team brain's checkout is {commits} behind its upstream. Go on anyway? [y/N] "
-            if not sys.stdin.isatty() or input(question).strip().lower() not in ("y", "yes"):
-                finding = Finding("load.behind", str(repo), f"The checkout is {commits} behind its upstream.", f"Run git -C {repo} pull, then brain load {args.who} again.")
-                return Result("load", "refused", f"The team brain is {commits} behind; nothing started.", [finding], lines=lines)
-        elif behind:
-            warnings.append(Finding("load.behind", str(repo), f"The checkout is {commits} behind its upstream.", f"Run git -C {repo} pull.", WARN))
+    lines.append(f"  agent: {member.display_name} ({member.name})")
     _, _, problems = team.team_settings(crew)
     checked = team.check_loads(crew, member.brain, member.meta, repo)
     warnings += [Finding(f.code, f.file, f.message, f.fix, WARN) for f in [*problems, *checked.findings]]
@@ -512,7 +532,7 @@ def cmd_load(args) -> Result:
     plain = [s.folder for s in skills if s.plugin is None]
     built = adapters.command(chosen, [s.plugin for s in skills if s.plugin], text, args.harness_args, loading.outside(plain, Path.cwd()))
     lines += [f"  harness: {harness.KNOWN.get(chosen, chosen)}", "  command:", f"  {shlex.join(built)}"]
-    value = {"agent": member.row(), "team": crew.name, "harness": chosen, "instruction": text, "command": built}
+    value = {"agent": member.row(), "team": crew.name, "snapshot": taken, "harness": chosen, "instruction": text, "command": built}
     if args.dry_run:
         return Result("load", "ok", f"Dry run: {member.display_name} would start in {harness.KNOWN.get(chosen, chosen)}; nothing started.", warnings, lines=lines, value=value)
     if shutil.which(built[0]) is None:

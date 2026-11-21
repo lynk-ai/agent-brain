@@ -67,8 +67,8 @@ def resolve_team(project: Path | None) -> tuple[Brain, str]:
     return crew, f"the saved path ({settings.path()})"
 
 
-def members_of(crew: Brain) -> list[Member]:
-    repo = team.repo_root(crew) or crew.root.parent
+def members_of(crew: Brain, repo: Path | None = None) -> list[Member]:
+    repo = repo or team.repo_root(crew) or crew.root.parent
     found = []
     for name, source in sorted(team.roster(load_records(crew)).items()):
         agent = team.brain_at(repo, source) if source else None

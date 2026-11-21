@@ -9,6 +9,8 @@ from .output import BrainError, Finding
 
 CONFIG_FILE = "brain.yaml"
 COPY_MARKER = ".brain-source.yaml"
+# brain load's snapshot of a team's default branch: read-only, and never the brain's repository.
+SNAPSHOT_MARKER = ".brain-snapshot.yaml"
 # The brain.yaml format this CLI writes. A brain.yaml with no format is format 1, which reads as 2.
 FORMAT = 2
 KINDS = ("agent", "team")
@@ -107,6 +109,11 @@ def find_all(start: Path) -> list[Brain]:
 def require_writable(brain: Brain) -> None:
     # An installed copy (a plugin cache or install --copy) is not the brain's repository, so a change there is lost.
     source = brain.config.get("source") or {}
+    snapshot = next((top / SNAPSHOT_MARKER for top in (brain.root, *brain.root.parents) if (top / SNAPSHOT_MARKER).is_file()), None)
+    if snapshot is not None:
+        made = yaml.safe_load(snapshot.read_text()) or {}
+        fix = f"Change the brain on a branch in its repository, {made.get('repo')}, and open a pull request. brain load --checkout loads that branch."
+        raise BrainError(Finding("brain.snapshot", str(brain.skill_dir), f"This is a snapshot brain load made of {made.get('ref')} at {str(made.get('commit'))[:12]}. A change here never reaches its repository.", fix))
     if not brain.copy and (not source or in_git(brain.root)):
         return
     repo, path = source.get("repo"), source.get("path")

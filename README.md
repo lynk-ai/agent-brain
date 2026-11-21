@@ -70,16 +70,21 @@ brain team                             # who is on the team, read live
 brain load triage                      # a Claude Code session as the triage agent, from any folder
 brain load writer --harness codex --dry-run
 brain load writer -- --model opus      # what follows -- goes to the harness as it is
+brain load triage --checkout           # the working folder as it is, to test a brain on a branch
 ```
 
-`brain team` and `brain load` read the team brain at run time, so a rename, a new agent, a changed load or a removed agent shows on the next run. Nothing is installed or generated. The only thing saved is the path, in `~/.config/brain/config.toml` (`$XDG_CONFIG_HOME/brain/config.toml`, or the file `$BRAIN_CONFIG` names). `--project` and the current folder win over it.
+`brain team` and `brain load` read the team brain at run time, so a rename, a new agent, a changed load or a removed agent shows on the next run. Nothing is installed in a harness: without `brain load`, a session gets no agent's brain. The only thing saved is the path, in `~/.config/brain/config.toml` (`$XDG_CONFIG_HOME/brain/config.toml`, or the file `$BRAIN_CONFIG` names). `--project` and the current folder win over it.
 
 `brain load <who>`:
 1. Finds the agent on the roster by its display name, then its brain name, then a word of its job, without case. Two or more matches list the agents and exit 2. No match prints the roster and exits 2.
-2. Fetches the team's repository. A checkout behind its upstream says by how many commits and asks before it goes on. With no network it warns and goes on. `--no-fetch` skips this.
+2. Fetches the team's repository and loads a read-only snapshot of its remote's default branch (the remote's `HEAD`, else `main` or `master`), never the working folder. So a branch, an edit not committed or a change half made never reaches a session, and every session says which commit it runs. The fetch changes no working file and no branch. With no network it warns (`load.not_fetched`) and loads the default branch as last fetched; `--no-fetch` skips the fetch. A repository with no remote default branch loads its working folder as it is, with the warning `load.no_snapshot`. `--checkout` loads the working folder on purpose, to test a brain on a branch: it asks before it goes on when the checkout is behind its upstream (`load.behind`).
 3. Reads the agent's `agent.md`: `display_name`, `loads` (`brain`, `skills`, `books`) and `harness` (`claude`, `codex`, `cursor` or `grokbot`; default `claude`). Only `claude` and `codex` have a load adapter: an agent whose harness is `cursor` or `grokbot` needs `--harness claude` or `--harness codex`, or `brain load` exits 2 with `load.no_adapter`. `brain install`, `brain hooks` and harness detection know Claude Code, Codex and Cursor only.
 4. Resolves each load, its own brain first, and runs the load checks, each as a warning. A bare name is a brain with that name in the repository. An entry that starts with `./`, `../`, `/` or `~` is a path to a skill folder holding a SKILL.md, whose front matter `name` should match the folder. A relative path is read from the repository's top folder, not from where `brain` runs. The agent's `agent.md` alone says what it loads and from where; the CLI knows no skill or book source by name.
 5. Starts the harness with one fixed instruction: "You are <display name>. Before your first answer, read these skills in this order and follow them:", the full path of each SKILL.md in load order, then one line per book source: "Your books from <source>: <ids>." Claude Code gets `claude --plugin-dir <brain folder>` for each brain, `--add-dir <folder>` for each plain skill folder outside the repository you run it in, and `--append-system-prompt "<instruction>"`. A plain skill folder gets no `--plugin-dir`. Codex gets `codex -c developer_instructions="<instruction>"`, since it has no plugin flag for one session; the SKILL.md paths do the loading. Cursor has no adapter yet. `--dry-run` prints the command and starts nothing.
+
+#### The snapshot
+
+A snapshot is one folder for each commit, at `~/.cache/brain/<team>/<commit>/` (`$XDG_CACHE_HOME/brain/...`), shared by every session on that commit on the machine. It holds every folder with a `brain.yaml`, each agent's relative path loads and the team's book lists, from `git archive`: not the rest of the repository. Its files and folders are read-only, and `brain` refuses to write there (`brain.snapshot`) and names the repository to change on a branch. A session that is open keeps its snapshot, so its brain does not change under it. Each load deletes old snapshots but keeps the newest 5 and every one used in the last 7 days: set `snapshots_keep` and `snapshots_days` in the config file to change them.
 
 ```yaml
 # agent.md
@@ -127,7 +132,7 @@ The team's central agent takes each pointer in: `brain feedback add --intake-of 
 | `brain team add <path>` | In a team brain: lists the agent brain at `<path>` and moves its lanes and routines into the team. |
 | `brain team use [<path>]` | Saves the path of the repository that holds the team brain, in the user's settings. With no path, prints the saved one. |
 | `brain team` | Lists the roster, read live from the team brain: display name, brain name and job, one line each. Finds the team by `--project`, then the current folder, then the saved path. |
-| `brain load <who> [--harness claude\|codex] [--dry-run] [--no-fetch] [-- <harness arguments>]` | Starts a coding agent session as one agent on the team, for that session only. See [Start a session as one agent](#start-a-session-as-one-agent). |
+| `brain load <who> [--harness claude\|codex] [--dry-run] [--no-fetch] [--checkout] [-- <harness arguments>]` | Starts a coding agent session as one agent on the team, for that session only. See [Start a session as one agent](#start-a-session-as-one-agent). |
 | `brain team remove <agent> --routine <id>=back\|retire\|<agent>` | In a team brain: takes the agent off the roster. Its lane rows go back to its agent.md. Each routine it owns needs one `--routine` choice. `back` returns it with its agent prefix and name suffix removed, and its status kept. |
 | `brain hooks install [--harness claude\|codex\|cursor] [--dir <folder>]` | Installs the pre-commit hook, and the Stop hook (and SessionStart for Claude Code and Codex) of the harness running the command, or of each `--harness`. Lists the other harnesses it supports, so the agent asks the person about them. |
 
@@ -160,7 +165,7 @@ levels:
 
 Each finding names its code in brackets. The codes are stable: `levels:` in brain.yaml, hooks and agents match on them.
 
-- **Brain and config:** `brain.config`, `brain.not_found`, `brain.format_missing`, `brain.format_newer`, `brain.installed_copy`, `cli.two_projects`, `check.no_git`.
+- **Brain and config:** `brain.config`, `brain.not_found`, `brain.format_missing`, `brain.format_newer`, `brain.installed_copy`, `brain.snapshot`, `cli.two_projects`, `check.no_git`.
 - **Records:** `record.bad_id`, `record.bad_value`, `record.duplicate_name`, `record.exists`, `record.missing_field`, `record.missing_section`, `record.not_found`, `record.not_markdown`, `record.unfinished`, `record.unknown_field`, `record.unknown_type`, `record.unreadable`, `agent.missing`, `agent.name`.
 - **Links:** `link.broken`, `link.one_way`, `link.target`, `link.unresolved`.
 - **Feedback:** `feedback.disposition`, `feedback.elsewhere_pointer`, `feedback.empty`, `feedback.future_date`, `feedback.intake_in_agent`, `feedback.kept_without_record`, `feedback.kind`, `feedback.linked`, `feedback.linked_not_kept`, `feedback.missing`, `feedback.no_did`, `feedback.no_reason`, `feedback.pending_too_long`, `feedback.pointer_not_elsewhere`, `feedback.undecided`, `feedback.use_link`.
@@ -168,7 +173,7 @@ Each finding names its code in brackets. The codes are stable: `levels:` in brai
 - **Skill and text:** `skill.agent_markers_missing`, `skill.agent_stale`, `skill.description`, `skill.front_matter`, `skill.index_stale`, `skill.lists_feedback`, `skill.markers_missing`, `skill.missing`, `skill.name`, `skill.size`, `skill.too_long`, `core.harness_name`, `data.personal`, `data.secret`, `data.sensitive`.
 - **Team:** `team.agent_has_lane`, `team.agent_has_routine`, `team.agent_not_in_team`, `team.entry_name`, `team.no_repository`, `team.not_found`, `team.not_member`, `team.not_team`, `team.other_team`, `team.procedure_in_use`, `team.routine_choice`, `team.routine_exists`, `team.source_missing`.
 - **Lanes:** `lanes.agent_without_lane`, `lanes.bad_table`, `lanes.bad_work`, `lanes.duplicate`, `lanes.missing`, `lanes.unknown_owner`.
-- **Load:** `load.ambiguous`, `load.bad_book`, `load.bad_path`, `load.behind`, `load.book_list_missing`, `load.book_unlisted`, `load.known_gap`, `load.no_adapter`, `load.no_book_list`, `load.no_harness`, `load.not_fetched`, `load.not_on_team`, `load.not_provided`, `load.skill_name`, `settings.unreadable`, `team.many`, `team.not_saved`.
+- **Load:** `load.ambiguous`, `load.bad_book`, `load.bad_path`, `load.behind`, `load.book_list_missing`, `load.book_unlisted`, `load.known_gap`, `load.no_adapter`, `load.no_book_list`, `load.no_harness`, `load.no_snapshot`, `load.not_fetched`, `load.not_in_snapshot`, `load.snapshot_failed`, `load.not_on_team`, `load.not_provided`, `load.skill_name`, `settings.unreadable`, `team.many`, `team.not_saved`.
 - **Team routines:** `routine.bad_procedure`, `routine.owner_no_lane`, `routine.owner_not_runner`, `routine.unknown_owner`, `routine.unresolved_procedure`.
 - **Intake:** `intake.bad_pointer`, `intake.missing`, `intake.not_pointed`, `intake.unresolved`.
 - **Setup:** `init.bad_name`, `init.not_empty`, `init.team_options`, `install.exists`, `install.where`, `hooks.no_git`, `hooks.nothing`, `hooks.pre_commit_exists`, `plugin.drift`.
