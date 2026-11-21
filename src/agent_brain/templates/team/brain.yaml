@@ -1,9 +1,13 @@
-format: 2
+format: 3
 kind: team
 name: {{name}}
+# The agent brains on the team: each one's folder, from the repository's top folder. brain team add and remove edit it.
+agents: []
+# The word every agent brain's name starts with, such as acme for acme-support-brain. brain check warns on a member without it.
+# domain: acme
 # Days after which pending feedback, a policy's checked date, and an agent's pointer to the team with no intake record show as warnings.
 pending_days: 14
 checked_days: 90
 intake_days: 14
-# Harness details the skill may not name. They belong in harness/<harness>/.
+# Harness details the skill may not name: the harness is agent.md's harness field, and harness knowledge belongs in a book.
 harness_names: [".claude/", ".codex/", ".cursor/", ".agents/skills", "settings.local.json"]

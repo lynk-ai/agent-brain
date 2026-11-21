@@ -10,9 +10,8 @@ anti_jobs:
 needs_approval: []
 data: []
 tools: []
-loads:
-  brain: {{name}}
-  books: []
+skills: []
+books: []
 decider: "TODO: the role that settles conflicts and approves changes to the brain"
 roles: {}
 enforce_in_harness: []

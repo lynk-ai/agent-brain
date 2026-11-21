@@ -90,7 +90,7 @@ def test_a_path_load_and_the_book_lists_are_in_the_snapshot(crew, repo, cache, t
     (style / "SKILL.md").write_text("---\nname: style\ndescription: House style.\n---\nWrite plainly.\n")
     (repo / "books.txt").write_text("plain-words\n")
     (crew.root / "brain.yaml").write_text((crew.root / "brain.yaml").read_text() + "books:\n  lib: books.txt\n")
-    set_agent(repo, "triage", loads={"brain": "triage", "books": ["lib:plain-words"], "skills": ["acme-support", "./skills/style"]})
+    set_agent(repo, "triage", skills=["acme-support", "./skills/style"], books=["lib:plain-words"])
     git(repo, "add", "-A")
     git(repo, *COMMIT, "-m", "team")
     remote = tmp_path_factory.mktemp("remote") / "acme.git"

@@ -56,10 +56,11 @@ def run(brain: Brain, records: Records | None = None, today: dt.date | None = No
 def check_format(brain: Brain) -> list[Finding]:
     from .brain import FORMAT
 
-    if "format" in brain.config:
+    version = brain.config.get("format", 1)
+    if version == FORMAT:
         return []
-    # A format 1 brain reads as format 2 unchanged, so the missing line only warns.
-    return [Finding("brain.format_missing", "brain.yaml", "brain.yaml has no format, so it reads as format 1.", f"Add the line format: {FORMAT}.", WARN)]
+    moves = "list the agent brains' folders in agents:, delete references/agents/, and set format: 3" if brain.is_team else "move agent.md's loads to skills: and books:, and set format: 3"
+    return [Finding("brain.format_old", "brain.yaml", f"brain.yaml is format {version}; this brain reads format {FORMAT}.", f"In this brain: {moves}. Then run brain index --replace.")]
 
 
 def check_shapes(brain: Brain, records: Records) -> list[Finding]:
@@ -93,7 +94,9 @@ def check_record(brain: Brain, record: Record, kind: Kind) -> list[Finding]:
     findings: list[Finding] = []
     where = brain.rel(record.path)
     for key in record.meta:
-        if key not in kind.fields:
+        if key == "loads" and kind is AGENT:
+            findings.append(Finding("agent.loads_removed", where, "agent.md has loads, which this CLI no longer reads.", "Move loads.skills to skills: and loads.books to books:, and delete loads. The agent's own brain always loads first."))
+        elif key not in kind.fields:
             findings.append(Finding("record.unknown_field", where, f"{kind.name} has no field {key!r}.", f"Use only: {', '.join(kind.fields)}."))
     for key, spec in kind.fields.items():
         value = record.meta.get(key)
@@ -269,6 +272,8 @@ def check_skill(brain: Brain, records: Records, repo: Path | None = None) -> lis
     from . import plugin
 
     findings += plugin.drift(brain)
+    if index.hand_written(brain, text):
+        findings.append(Finding("skill.hand_written", where, "SKILL.md has text that brain index does not write. Only its front matter, with the description, is written by hand.", "Move that text into agent.md, a rule, a procedure or the team's lanes, then run brain index --replace."))
     if brain.is_team:
         current = index.current(text)
         if current is None:
@@ -319,7 +324,7 @@ def check_text(brain: Brain) -> list[Finding]:
                 findings.append(Finding("data.personal", where, "It looks like a card number.", "Replace it with [card removed]."))
             for name in harness_names:
                 if name in line:
-                    findings.append(Finding("core.harness_name", where, f"The core names {name!r}, a harness detail.", "Keep harness details in harness/<harness>/, outside the skill."))
+                    findings.append(Finding("core.harness_name", where, f"The core names {name!r}, a harness detail.", "Keep harness details out of the skill: the harness is agent.md's harness field, and harness knowledge belongs in a book."))
     return findings
 
 

@@ -44,7 +44,7 @@ def locate(start: Path, walk_without_git: bool) -> Brain | None:
     crews = [b for b in team.brains_in(repo or start) if b.is_team]
     if len(crews) > 1:
         names = ", ".join(str(b.root) for b in crews)
-        raise BrainError(Finding("team.many", str(repo or start), f"More than one team brain is here: {names}.", "Pass --project with one of them, or save it: brain team use <folder>."), outcome="error")
+        raise BrainError(Finding("team.many", str(repo or start), f"More than one team brain is here: {names}.", "Pass --project with one of them, or save it: brain use <folder>."), outcome="error")
     return crews[0] if crews else None
 
 
@@ -60,17 +60,54 @@ def resolve_team(project: Path | None) -> tuple[Brain, str]:
         return crew, "the current folder"
     saved = settings.saved_team()
     if saved is None:
-        raise BrainError(Finding("team.not_saved", str(Path.cwd()), "No team brain here, and no saved path.", "Run brain team use <the repository that holds the team brain>, or pass --project."), outcome="error")
+        raise BrainError(Finding("team.not_saved", str(Path.cwd()), "No team brain here, and no saved path.", "Run brain use <the repository that holds the team brain>, or pass --project."), outcome="error")
     crew = locate(saved, walk_without_git=True)
     if crew is None:
-        raise BrainError(Finding("team.not_found", str(saved), f"The saved path {saved} holds no team brain now.", "Run brain team use <the repository that holds the team brain>."), outcome="error")
+        raise BrainError(Finding("team.not_found", str(saved), f"The saved path {saved} holds no team brain now.", "Run brain use <the repository that holds the team brain>."), outcome="error")
     return crew, f"the saved path ({settings.path()})"
+
+
+def lone_agent(start: Path) -> Brain | None:
+    # An agent brain with no team loads alone: its own folder says who it is.
+    try:
+        here = find(start.expanduser().resolve())
+    except BrainError:
+        return None
+    return here if not here.is_team and not here.team and here.agent_file.is_file() else None
+
+
+def resolve_brain(project: Path | None) -> tuple[Brain, str]:
+    # A team brain, or one agent brain with no team: --project wins, then the current folder, then the saved path.
+    if project is not None:
+        found = locate(project, walk_without_git=True) or lone_agent(project)
+        if found is None:
+            raise BrainError(Finding("team.not_found", str(project), "No team brain or agent brain in this folder, above it, or in its repository.", "Pass --project with a team brain's or an agent brain's folder."), outcome="error")
+        return found, "--project"
+    found = locate(Path.cwd(), walk_without_git=False) or lone_agent(Path.cwd())
+    if found is not None:
+        return found, "the current folder"
+    saved = settings.saved_team()
+    if saved is None:
+        raise BrainError(Finding("team.not_saved", str(Path.cwd()), "No brain here, and no saved path.", "Run brain use <a team brain's or an agent brain's folder>, or pass --project."), outcome="error")
+    found = locate(saved, walk_without_git=True) or lone_agent(saved)
+    if found is None:
+        raise BrainError(Finding("team.not_found", str(saved), f"The saved path {saved} holds no team brain or agent brain now.", "Run brain use <folder>."), outcome="error")
+    return found, f"the saved path ({settings.path()})"
+
+
+def member_of(agent: Brain) -> Member | None:
+    record = load_records(agent).agent
+    if record is None:
+        return None
+    meta = record.meta
+    display, job = meta.get("display_name"), meta.get("job")
+    return Member(agent.name, display if isinstance(display, str) and display else agent.name, " ".join(job.split()) if isinstance(job, str) else "", agent, meta)
 
 
 def members_of(crew: Brain, repo: Path | None = None) -> list[Member]:
     repo = repo or team.repo_root(crew) or crew.root.parent
     found = []
-    for name, source in sorted(team.roster(load_records(crew)).items()):
+    for name, source in sorted(team.roster(crew, repo).items()):
         agent = team.brain_at(repo, source) if source else None
         record = load_records(agent).agent if agent is not None and not agent.is_team else None
         meta = record.meta if record is not None else {}

@@ -56,13 +56,24 @@ def source_of(brain: Brain, repo: Path) -> str:
     return str(brain.root.resolve().relative_to(repo.resolve()))
 
 
-def roster(team_records: Records) -> dict[str, str]:
-    return {r.id: str(r.meta.get("source", "")) for r in team_records.by_folder["agents"].values()}
+def roster_sources(team: Brain) -> list[str]:
+    value = team.config.get("agents") or []
+    return [str(v) for v in value] if isinstance(value, list) else []
+
+
+def roster(team: Brain, repo: Path | None = None) -> dict[str, str]:
+    # The team's brain.yaml lists each agent's folder; the agent's name is the one its own brain.yaml gives.
+    repo = repo_root(team, repo) or team.root.parent
+    found: dict[str, str] = {}
+    for source in roster_sources(team):
+        agent = brain_at(repo, source)
+        found.setdefault(agent.name if agent is not None else Path(source).name, source)
+    return found
 
 
 def members(team: Brain, repo: Path) -> dict[str, Brain]:
     found = {}
-    for name, source in roster(load(team)).items():
+    for name, source in roster(team, repo).items():
         agent = brain_at(repo, source) if source else None
         if agent is not None and not agent.is_team:
             found[name] = agent
@@ -149,7 +160,7 @@ def check_member(brain: Brain, records: Records, repo: Path | None) -> list[Find
     team = find_team(repo, brain.team)
     if team is None:
         findings.append(Finding("team.not_found", "brain.yaml", f"team names {brain.team!r}, but no team brain of that name is in this repository.", "Fix team:, or create it with brain init <team> --team."))
-    elif brain.name not in roster(load(team)):
+    elif brain.name not in roster(team, repo):
         findings.append(Finding("team.not_member", "brain.yaml", f"team names {brain.team}, but its roster does not list {brain.name}.", f"Run brain team add {source_or_root(brain, repo)} --project {team.root}."))
     return findings
 
@@ -162,7 +173,7 @@ def team_pointer_problem(brain: Brain, target: str, repo: Path | None) -> str:
     team = brain if brain.is_team else find_team(repo, brain.team or "")
     if team is None:
         return f"kept_in names brain:{target}, but team {brain.team} is not in this repository."
-    if target == team.name or target in roster(load(team)):
+    if target == team.name or target in roster(team, repo):
         return ""
     return f"kept_in names brain:{target}, which is neither team {team.name} nor an agent on its roster."
 
@@ -172,24 +183,25 @@ def check_team(brain: Brain, records: Records, today, repo: Path | None) -> list
     if repo is None:
         return [Finding("team.no_repository", brain.rel(brain.root), "A team brain must be in a git repository, with its agents.", "Run git init in the repository's top folder.")]
     agents: dict[str, Brain] = {}
-    for entry in records.by_folder["agents"].values():
-        where = brain.rel(entry.path)
-        if entry.meta.get("name") != entry.id:
-            findings.append(Finding("team.entry_name", where, f"name is not {entry.id!r}, the file's name.", f"Set name: {entry.id}."))
-        source = entry.meta.get("source")
-        if not isinstance(source, str) or not source:
-            continue
+    listed = brain.config.get("agents")
+    if listed is not None and not (isinstance(listed, list) and all(isinstance(v, str) for v in listed)):
+        findings.append(Finding("brain.config", "brain.yaml", "agents must be a list of agent brain folders.", "Write agents: [<folder>, <folder>], each from the repository's top folder."))
+    domain = brain.config.get("domain")
+    for source in roster_sources(brain):
         agent = brain_at(repo, source)
         if agent is None or agent.is_team:
-            findings.append(Finding("team.source_missing", where, f"source {source!r} is not an agent brain in this repository.", "Give the agent brain's folder, from the repository's top folder."))
+            findings.append(Finding("team.source_missing", "brain.yaml", f"agents lists {source!r}, which is not an agent brain in this repository.", "Give the agent brain's folder, from the repository's top folder, or run brain team remove."))
             continue
-        if agent.name != entry.id:
-            findings.append(Finding("team.entry_name", where, f"{source} holds {agent.name}, not {entry.id}.", f"Rename the file to {agent.name}.md and set name: {agent.name}."))
+        if agent.name in agents:
+            findings.append(Finding("team.entry_name", "brain.yaml", f"agents lists two brains named {agent.name}.", "Give one of the two agents another name."))
             continue
         if agent.team != brain.name:
-            findings.append(Finding("team.agent_not_in_team", where, f"{agent.name}'s brain.yaml does not say team: {brain.name}.", f"Run brain team add {source}."))
+            findings.append(Finding("team.agent_not_in_team", "brain.yaml", f"{agent.name}'s brain.yaml does not say team: {brain.name}.", f"Run brain team add {source}."))
+        if isinstance(domain, str) and domain and not agent.name.startswith(f"{domain}-"):
+            findings.append(Finding("team.name_domain", "brain.yaml", f"{agent.name} does not start with the team's domain, {domain}.", f"Name it {domain}-<role>-brain, if it belongs to {domain}.", "warn"))
         agents[agent.name] = agent
 
+    names = set(roster(brain, repo))
     where = f"{brain.rel(brain.references)}/lanes.md"
     lanes, problems = parse_lanes(records, where)
     findings += problems
@@ -197,21 +209,21 @@ def check_team(brain: Brain, records: Records, today, repo: Path | None) -> list
         findings.append(Finding("lanes.missing", where, "The team has no lanes.md.", "Run brain index, which writes an empty one, then add a row for each piece of work."))
     seen: dict[str, Lane] = {}
     for lane in lanes:
-        if lane.owner not in records.by_folder["agents"]:
-            findings.append(Finding("lanes.unknown_owner", f"{where}:{lane.line}", f"The owner {lane.owner!r} is not on the roster.", "Name an agent from references/agents/, or run brain team add."))
+        if lane.owner not in names:
+            findings.append(Finding("lanes.unknown_owner", f"{where}:{lane.line}", f"The owner {lane.owner!r} is not on the roster.", "Name an agent from agents: in the team's brain.yaml, or run brain team add."))
         key = work_key(lane.work)
         if key in seen:
             findings.append(Finding("lanes.duplicate", f"{where}:{lane.line}", f"{lane.work!r} is also on line {seen[key].line}.", "Keep one row, with its one owner."))
         seen.setdefault(key, lane)
     owners = {lane.owner for lane in lanes}
-    for name in records.by_folder["agents"]:
+    for name in sorted(names):
         if name not in owners:
             findings.append(Finding("lanes.agent_without_lane", where, f"{name} owns no work in lanes.md.", f"Add a row with {name} as its owner, or remove the agent.", "warn"))
 
     for routine in records.by_folder["routines"].values():
         if routine.meta.get("status") == "retired":
             continue
-        findings += check_routine(brain, routine, records, agents, owners)
+        findings += check_routine(brain, routine, names, agents, owners)
 
     findings += check_intake(brain, records, repo)
     findings += check_open_pointers(brain, records, agents, today)
@@ -219,12 +231,12 @@ def check_team(brain: Brain, records: Records, today, repo: Path | None) -> list
     return findings
 
 
-def check_routine(brain: Brain, routine, records: Records, agents: dict[str, Brain], owners: set[str]) -> list[Finding]:
+def check_routine(brain: Brain, routine, names: set[str], agents: dict[str, Brain], owners: set[str]) -> list[Finding]:
     findings = []
     where = brain.rel(routine.path)
     owner = routine.meta.get("owner")
-    if isinstance(owner, str) and owner and owner not in records.by_folder["agents"]:
-        findings.append(Finding("routine.unknown_owner", where, f"owner {owner!r} is not on the roster.", "Name an agent from references/agents/."))
+    if isinstance(owner, str) and owner and owner not in names:
+        findings.append(Finding("routine.unknown_owner", where, f"owner {owner!r} is not on the roster.", "Name an agent from agents: in the team's brain.yaml."))
     elif isinstance(owner, str) and owner and owner not in owners:
         findings.append(Finding("routine.owner_no_lane", where, f"owner {owner} owns no work in lanes.md.", f"Add the routine's work to lanes.md with {owner} as its owner, or give the routine to the agent that owns it.", "warn"))
     pointer = routine.meta.get("procedure")
@@ -238,7 +250,7 @@ def check_routine(brain: Brain, routine, records: Records, agents: dict[str, Bra
         findings.append(Finding("routine.owner_not_runner", where, f"owner is {owner}, but the procedure is {agent_name}'s.", f"Give the routine to {agent_name}, or point it to a procedure in {owner}'s brain.", "warn"))
     agent = agents.get(agent_name)
     if agent is None:
-        findings.append(Finding("routine.unresolved_procedure", where, f"procedure names agent {agent_name!r}, which is not on the roster.", "Name an agent from references/agents/."))
+        findings.append(Finding("routine.unresolved_procedure", where, f"procedure names agent {agent_name!r}, which is not on the roster.", "Name an agent from agents: in the team's brain.yaml."))
     elif pid not in load(agent).by_folder["procedures"]:
         findings.append(Finding("routine.unresolved_procedure", where, f"procedure names {pid!r}, which is not in {agent_name}'s brain.", f"Name a file from {agent_name}'s references/procedures/ without .md."))
     return findings
@@ -334,10 +346,15 @@ def set_config_lines(brain: Brain, changes: dict[str, object]) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
+def flow_list(values: list[str]) -> str:
+    # One line, so set_config_lines keeps brain.yaml's comments.
+    return "[" + ", ".join(values) + "]"
+
+
 def add(team: Brain, path: Path) -> list[str]:
     from . import index
     from .brain import FORMAT
-    from .records import AGENT_ENTRY, Record, write_record
+    from .records import Record, write_record
 
     repo = require_repo(team)
     folder = path.resolve()
@@ -348,9 +365,10 @@ def add(team: Brain, path: Path) -> list[str]:
         raise BrainError(Finding("team.other_team", str(path), f"{agent.name} is already in team {agent.team}. An agent brain is in one team.", f"Run brain team remove {agent.name} in {agent.team}'s brain first, or copy the brain."))
     source = source_of(agent, repo)
     records = load(team)
-    listed = records.by_folder["agents"].get(agent.name)
-    if listed is not None and listed.meta.get("source") != source:
-        raise BrainError(Finding("team.entry_name", str(path), f"The roster already has {agent.name}, from {listed.meta.get('source')}.", "Give one of the two agents another name."))
+    on_roster = roster(team, repo)
+    listed = on_roster.get(agent.name)
+    if listed is not None and listed != source:
+        raise BrainError(Finding("team.entry_name", str(path), f"The roster already has {agent.name}, from {listed}.", "Give one of the two agents another name."))
 
     agent_records = load(agent)
     lanes, problems = parse_lanes(records, "lanes.md")
@@ -373,10 +391,9 @@ def add(team: Brain, path: Path) -> list[str]:
             raise BrainError(Finding("team.routine_exists", f"routines/{target}", f"The team already has a routine {target}.", f"Rename {agent.name}'s routine {rid}, then run it again."))
 
     lines = []
-    entry = Record(AGENT_ENTRY, agent.name, team.references / "agents" / f"{agent.name}.md", {"name": agent.name, "source": source}, "")
     if listed is None:
-        entry.path.parent.mkdir(parents=True, exist_ok=True)
-        write_record(entry)
+        set_config_lines(team, {"agents": flow_list([*roster_sources(team), source])})
+        team = Brain(root=team.root, config=load_config(team.root / CONFIG_FILE))
         lines.append(f"  roster: {agent.name} from {source}")
     if new_lanes or records.lanes is None:
         write_lanes(team, records, [*lanes, *new_lanes])
@@ -408,12 +425,13 @@ def remove(crew: Brain, name: str, choices: dict[str, str]) -> list[str]:
 
     repo = require_repo(crew)
     records = load(crew)
-    entry = records.by_folder["agents"].get(name)
-    if entry is None:
-        raise BrainError(Finding("record.not_found", f"agents/{name}", f"{name} is not on the roster.", f"Known: {', '.join(sorted(records.by_folder['agents'])) or 'none'}."), outcome="error")
-    agent = brain_at(repo, str(entry.meta.get("source") or ""))
+    on_roster = roster(crew, repo)
+    source = on_roster.get(name)
+    if source is None:
+        raise BrainError(Finding("record.not_found", "brain.yaml", f"{name} is not on the roster.", f"Known: {', '.join(sorted(on_roster)) or 'none'}."), outcome="error")
+    agent = brain_at(repo, source)
     if agent is None or agent.is_team:
-        raise BrainError(Finding("team.source_missing", crew.rel(entry.path), f"{name}'s source is not an agent brain in this repository.", "Fix its source first, so its lanes and routines can go back."))
+        raise BrainError(Finding("team.source_missing", "brain.yaml", f"{name}'s folder {source} is not an agent brain in this repository.", "Fix agents: in the team's brain.yaml first, so its lanes and routines can go back."))
     routines = records.by_folder["routines"]
     owned = {rid: r for rid, r in routines.items() if r.meta.get("owner") == name and r.meta.get("status") != "retired"}
     others = sorted(rid for rid, r in routines.items() if rid not in owned and r.meta.get("status") != "retired" and str(r.meta.get("procedure") or "").startswith(f"{name}:"))
@@ -438,9 +456,9 @@ def remove(crew: Brain, name: str, choices: dict[str, str]) -> list[str]:
             if agent_routine_id(name, rid) in agent_records.by_folder["routines"]:
                 raise BrainError(Finding("team.routine_exists", f"routines/{rid}", f"{name}'s brain already has a routine {agent_routine_id(name, rid)}.", "Rename one of them first."))
         elif choice != "retire":
-            if choice == name or choice not in records.by_folder["agents"]:
-                raise BrainError(Finding("team.routine_choice", f"routines/{rid}", f"{choice!r} is not another agent on the roster.", "Name back, retire or an agent from references/agents/."), outcome="error")
-            other = brain_at(repo, str(records.by_folder["agents"][choice].meta.get("source") or ""))
+            if choice == name or choice not in on_roster:
+                raise BrainError(Finding("team.routine_choice", f"routines/{rid}", f"{choice!r} is not another agent on the roster.", "Name back, retire or an agent from agents: in the team's brain.yaml."), outcome="error")
+            other = brain_at(repo, on_roster[choice])
             if other is None or pid not in load(other).by_folder["procedures"]:
                 raise BrainError(Finding("team.routine_choice", f"routines/{rid}", f"{choice}'s brain has no procedure {pid}.", f"Write procedures/{pid} in {choice}'s brain first, or retire the routine."))
         moves.append((rid, routine, choice, pid))
@@ -469,7 +487,8 @@ def remove(crew: Brain, name: str, choices: dict[str, str]) -> list[str]:
         agent_records.agent.meta["lane"] = [*[str(w) for w in agent_records.agent.meta.get("lane") or []], *given]
         write_record(agent_records.agent)
     lines += [f"  lane back to {name}: {work}" for work in given]
-    entry.path.unlink()
+    set_config_lines(crew, {"agents": flow_list([s for s in roster_sources(crew) if s != source])})
+    crew = Brain(root=crew.root, config=load_config(crew.root / CONFIG_FILE))
     set_config_lines(agent, {"team": None})
     agent = brain_at(repo, source_of(agent, repo))
     index.write(agent, load(agent), repo)
@@ -491,10 +510,7 @@ class Loads:
 
 
 def loads_of(agent: Brain, meta: dict) -> Loads:
-    loads = meta.get("loads") if isinstance(meta.get("loads"), dict) else {}
-    own = loads.get("brain")
-    own = own[0] if isinstance(own, list) and own else own
-    return Loads(own if isinstance(own, str) and own else agent.name, tuple(str(s) for s in names_in(loads.get("skills"))), tuple(str(b) for b in names_in(loads.get("books"))))
+    return Loads(agent.name, tuple(str(s) for s in names_in(meta.get("skills"))), tuple(str(b) for b in names_in(meta.get("books"))))
 
 
 def names_in(value) -> list:

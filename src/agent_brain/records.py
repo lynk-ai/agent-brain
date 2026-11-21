@@ -120,7 +120,9 @@ AGENT = Kind(
         "needs_approval": Field("list", required=False),
         "data": Field("list", required=False),
         "tools": Field("list", required=False),
-        "loads": Field("any", required=False),
+        # The agent's own brain loads first, always; these load after it.
+        "skills": Field("list", required=False, fix="List skill names, or paths that start with ./, ../, / or ~."),
+        "books": Field("list", required=False, fix="List books as <source>:<book id>."),
         "decider": Field("line"),
         "roles": Field("any", required=False),
         "enforce_in_harness": Field("list", required=False),
@@ -142,17 +144,11 @@ TEAM_ROUTINE = Kind(
     "routines",
     {
         **ROUTINE.fields,
-        "owner": Field("line", fix="Name an agent on the roster, from references/agents/."),
+        "owner": Field("line", fix="Name an agent on the roster, from agents: in the team's brain.yaml."),
         "procedure": Field("line", fix="Name <agent>:<procedure-id>, a procedure in that agent's brain."),
         "status": Field("enum", choices=("active", "paused", "retired")),
         "feedback": Field("list", required=False),
     },
-)
-
-AGENT_ENTRY = Kind(
-    "agent entry",
-    "agents",
-    {"name": Field("line", fix="Name the agent brain: its name in brain.yaml."), "source": Field("line", fix="Give the agent brain's folder, from the repository's top folder.")},
 )
 
 # A team's feedback is always an intake: an agent heard it, and intake_of names the agent's record.
@@ -174,7 +170,7 @@ LANES_FILE = "lanes.md"
 LANES_REF = "lanes"
 
 KINDS = {k.folder: k for k in (FEEDBACK, RULE, PROCEDURE, TOPIC, ROUTINE)}
-TEAM_KINDS = {k.folder: k for k in (AGENT_ENTRY, TEAM_FEEDBACK, POLICY, TEAM_ROUTINE, TOPIC)}
+TEAM_KINDS = {k.folder: k for k in (TEAM_FEEDBACK, POLICY, TEAM_ROUTINE, TOPIC)}
 # Feedback.kept_in and the CLI name a record as <folder>/<id>; only these may hold feedback.
 LINKABLE = ("rules", "procedures")
 TEAM_LINKABLE = ("policies", "routines", LANES_REF)

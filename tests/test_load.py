@@ -44,7 +44,7 @@ def crew(repo: Path, monkeypatch, tmp_path_factory):
         text = agent.agent_file.read_text().replace("help-center article drafts", f"{name} work for support tickets")
         agent.agent_file.write_text(text)
         team.add(find(made.root), agent.root)
-        set_agent(repo, name, display_name=display, job=job, loads={"brain": name, "books": [], "skills": ["acme-support"]})
+        set_agent(repo, name, display_name=display, job=job, skills=["acme-support"], books=[])
     crew = find(made.root)
     index.write(crew, load(crew), repo)
     return crew
@@ -119,7 +119,7 @@ def test_no_match_says_not_on_the_team_and_lists_the_roster(crew, capsys):
 
 
 def test_a_missing_skill_warns_in_load_and_blocks_in_check(crew, repo, capsys):
-    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["acme-support", "style-guide"]})
+    set_agent(repo, "writer", skills=["acme-support", "style-guide"])
     code, out = dry(capsys, crew, "wes")
     assert code == 0 and "warn brains/writer/writer/agent.md: writer loads style-guide" in out and "[load.not_provided]" in out
     assert "style-guide" not in out.split("command:")[1].split("\n")[1]
@@ -128,7 +128,7 @@ def test_a_missing_skill_warns_in_load_and_blocks_in_check(crew, repo, capsys):
 
 
 def test_a_known_gap_only_warns(crew, repo, capsys):
-    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["acme-support", "style-guide"]})
+    set_agent(repo, "writer", skills=["acme-support", "style-guide"])
     set_team_config(crew, "known_gaps: [style-guide]\n")
     crew = find(crew.root)
     findings = checks.run(crew)
@@ -142,7 +142,7 @@ def test_a_book_not_in_the_list_warns_and_an_unlisted_source_is_skipped(crew, re
     (repo / "tools").mkdir()
     (repo / "tools" / "books.txt").write_text("# book ids\nwrite-a-reply\n")
     set_team_config(crew, "books: {bambooks: tools/books.txt}\n")
-    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["acme-support"], "books": ["bambooks:write-a-reply", "bambooks:gone-book", "other:a-book"]})
+    set_agent(repo, "writer", skills=["acme-support"], books=["bambooks:write-a-reply", "bambooks:gone-book", "other:a-book"])
     crew = find(crew.root)
     findings = checks.run(crew)
     assert checks.blocking(findings) == []
@@ -156,7 +156,7 @@ def test_a_book_not_in_the_list_warns_and_an_unlisted_source_is_skipped(crew, re
 
 
 def test_a_bad_book_entry_and_a_bad_team_setting_block_check(crew, repo):
-    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["acme-support"], "books": ["no-source"]})
+    set_agent(repo, "writer", skills=["acme-support"], books=["no-source"])
     set_team_config(crew, "known_gaps: style-guide\n")
     assert sorted(f.code for f in checks.blocking(checks.run(find(crew.root)))) == ["brain.config", "load.bad_book"]
 
@@ -169,7 +169,7 @@ def make_skill(folder: Path, name: str | None = None) -> Path:
 
 def test_a_path_load_is_read_from_the_repository_top_and_gets_no_plugin_dir(crew, repo, capsys, monkeypatch):
     style = make_skill(repo / "skills" / "style-guide")
-    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["./skills/style-guide", "acme-support"]})
+    set_agent(repo, "writer", skills=["./skills/style-guide", "acme-support"])
     assert checks.blocking(checks.run(find(crew.root))) == []
     monkeypatch.chdir(repo / "brains")
     code, out = dry(capsys, crew, "wes", "--json")
@@ -185,7 +185,7 @@ def test_a_path_load_outside_the_working_repo_gets_add_dir(crew, repo, capsys, m
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
     style = make_skill(home / ".agents" / "skills" / "style-guide")
-    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["~/.agents/skills/style-guide"]})
+    set_agent(repo, "writer", skills=["~/.agents/skills/style-guide"])
     monkeypatch.chdir(repo)
     code, out = dry(capsys, crew, "wes", "--json")
     built = json.loads(out)["value"]["command"]
@@ -195,7 +195,7 @@ def test_a_path_load_outside_the_working_repo_gets_add_dir(crew, repo, capsys, m
 
 def test_a_path_load_with_no_skill_md_blocks_in_check_and_warns_in_load(crew, repo, capsys):
     (repo / "skills" / "empty").mkdir(parents=True)
-    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["./skills/empty", "../nowhere"]})
+    set_agent(repo, "writer", skills=["./skills/empty", "../nowhere"])
     assert [f.code for f in checks.blocking(checks.run(find(crew.root)))] == ["load.bad_path", "load.bad_path"]
     code, out = dry(capsys, crew, "wes")
     assert code == 0 and out.count("warn") == 2 and "[load.bad_path]" in out
@@ -203,7 +203,7 @@ def test_a_path_load_with_no_skill_md_blocks_in_check_and_warns_in_load(crew, re
 
 def test_a_path_load_whose_skill_md_names_another_skill_warns(crew, repo, capsys):
     make_skill(repo / "skills" / "style-guide", name="house-style")
-    set_agent(repo, "writer", loads={"brain": "writer", "skills": ["./skills/style-guide"]})
+    set_agent(repo, "writer", skills=["./skills/style-guide"])
     findings = checks.run(find(crew.root))
     assert checks.blocking(findings) == [] and [f.code for f in findings if f.code.startswith("load.")] == ["load.skill_name"]
     code, out = dry(capsys, crew, "wes")
@@ -226,14 +226,14 @@ def test_arguments_after_the_separator_go_to_the_harness(crew, capsys):
     assert code == 0 and json.loads(out)["value"]["command"][-3:] == ["--model", "opus", "--dry-run"]
 
 
-def test_team_use_saves_the_path_and_team_lists_from_any_folder(crew, repo, capsys, monkeypatch, tmp_path_factory):
+def test_use_saves_the_path_and_team_lists_from_any_folder(crew, repo, capsys, monkeypatch, tmp_path_factory):
     elsewhere = tmp_path_factory.mktemp("elsewhere")
     monkeypatch.chdir(elsewhere)
     code, out = run(capsys, "team")
     assert code == 2 and "[team.not_saved]" in out
-    code, out = run(capsys, "team", "use", str(repo))
+    code, out = run(capsys, "use", str(repo))
     assert code == 0 and "team acme-support" in out
-    code, out = run(capsys, "team", "use")
+    code, out = run(capsys, "use")
     assert code == 0 and str(repo.resolve()) in out
     code, out = run(capsys, "team")
     assert code == 0 and "Tara   triage     Sorts support tickets by urgency" in out
@@ -247,7 +247,7 @@ def test_the_current_folder_wins_over_the_saved_path(crew, repo, capsys, monkeyp
     other = tmp_path_factory.mktemp("other")
     subprocess.run(["git", "init", "-q", str(other)], check=True)
     scaffold.init_team(other / "brains" / "other-team", "other-team")
-    run(capsys, "team", "use", str(other))
+    run(capsys, "use", str(other))
     monkeypatch.chdir(repo / "brains" / "writer")
     code, out = run(capsys, "team", "--json")
     assert json.loads(out)["value"]["team"] == "acme-support"
